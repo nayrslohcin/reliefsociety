@@ -31,8 +31,14 @@ Parameters:
     Type: String
     Description: >
       Comma-separated list of allowed sender email addresses (lowercase).
-      Emails from any other address are silently dropped.
+      Emails from any other address are discarded and the admin is notified.
     Default: "sender@example.com"
+
+  AdminEmail:
+    Type: String
+    Description: >
+      Email address that receives notifications for unauthorized senders
+      and emails sent to unexpected recipients.
 
   PDFPrefix:
     Type: String
@@ -178,6 +184,8 @@ Resources:
           ALLOWED_SENDERS: !Ref AllowedSenders
           REPLY_FROM: !Ref ReplyFromAddress
           SES_REGION: !Ref AWS::Region
+          ADMIN_EMAIL: !Ref AdminEmail
+          RECIPIENT_EMAIL: !Ref RecipientEmailAddress
       Code:
         ZipFile: |
           import boto3, email, os, logging
@@ -194,23 +202,35 @@ Resources:
 
           def lambda_handler(event, context):
               allowed = set(os.environ.get("ALLOWED_SENDERS", "").lower().split(","))
+              expected = os.environ.get("RECIPIENT_EMAIL", "").lower().strip()
+              admin = os.environ.get("ADMIN_EMAIL", "").lower().strip()
+
               for record in event.get("Records", []):
-                  mail = record.get("ses", {}).get("mail", {})
+                  ses_data = record.get("ses", {})
+                  mail = ses_data.get("mail", {})
+                  receipt = ses_data.get("receipt", {})
                   msg_id = mail.get("messageId")
                   if not msg_id:
                       continue
                   sender = mail.get("source", "").lower().strip()
-                  logger.info(f"Processing {msg_id} from {sender}")
+                  recipients = [r.lower().strip() for r in receipt.get("recipients", [])]
+                  logger.info(f"Processing {msg_id} from {sender} to {recipients}")
+
+                  if expected and expected not in recipients:
+                      logger.info(f"Wrong recipient {recipients} — notifying admin")
+                      notify_admin(admin, sender, recipients, "wrong_recipient")
+                      continue
+
+                  if sender not in allowed:
+                      logger.info(f"Rejected unauthorised sender: {sender}")
+                      notify_admin(admin, sender, recipients, "unauthorized_sender")
+                      continue
 
                   raw = fetch_raw(msg_id)
                   if not raw:
                       continue
 
                   msg = email.message_from_bytes(raw, policy=ep.default)
-
-                  if sender not in allowed:
-                      logger.info(f"Rejected unauthorised sender: {sender}")
-                      continue  # Silently drop — no reply to unknown senders
 
                   html = find_index_html(msg)
                   if not html:
@@ -221,6 +241,38 @@ Resources:
                   upload_html(html, sender, msg_id)
 
               return {"statusCode": 200}
+
+          def notify_admin(admin, sender, recipients, reason):
+              if not admin:
+                  return
+              if reason == "unauthorized_sender":
+                  subject = "Unauthorized sender alert"
+                  body = (
+                      f"An unauthorized sender sent an email to "
+                      f"bulletin@plano4reliefsocietybulletin.org.\n\n"
+                      f"Sender: {sender}\n\n"
+                      "This is an automated notification."
+                  )
+              else:
+                  subject = "Wrong recipient alert"
+                  body = (
+                      f"An email was received for an unexpected recipient.\n\n"
+                      f"Sender: {sender}\n"
+                      f"Recipients: {', '.join(recipients)}\n\n"
+                      "This is an automated notification."
+                  )
+              try:
+                  ses_client().send_email(
+                      Source=os.environ["REPLY_FROM"],
+                      Destination={"ToAddresses": [admin]},
+                      Message={
+                          "Subject": {"Data": subject, "Charset": "UTF-8"},
+                          "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
+                      },
+                  )
+                  logger.info(f"Admin notified at {admin}")
+              except Exception as e:
+                  logger.error(f"Admin notification failed: {e}")
 
           def fetch_raw(msg_id):
               try:
@@ -574,6 +626,26 @@ Resources:
         Actions:
           - S3Action:
               BucketName: !Ref RawEmailBucket
+          - LambdaAction:
+              FunctionArn: !GetAtt EmailPdfProcessorFunction.Arn
+              InvocationType: Event
+
+  # ── SES catch-all rule ─────────────────────────────────────────────────────
+  # Matches any recipient not already handled by SESReceiptRule. The Lambda
+  # checks the recipient and notifies the admin for unexpected addresses.
+
+  SESCatchAllRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn: SESReceiptRule
+    Properties:
+      RuleSetName: !Ref SESReceiptRuleSet
+      After: !Ref SESReceiptRule
+      Rule:
+        Name: CatchAllProcessor
+        Enabled: true
+        TlsPolicy: Optional
+        ScanEnabled: true
+        Actions:
           - LambdaAction:
               FunctionArn: !GetAtt EmailPdfProcessorFunction.Arn
               InvocationType: Event
