@@ -184,17 +184,35 @@ aws logs tail /aws/lambda/email-pdf-ingest-EmailPdfProcessor --follow --region u
 - Unauthorized sender → silently dropped, admin notified at `<ADMIN_EMAIL>`
 - Email sent to wrong address → silently dropped, admin notified at `<ADMIN_EMAIL>`
 
-## Updating the Allowed Sender List
+## Adding / Removing / Updating Email Addresses
 
-No redeployment needed:
+No redeployment needed. Lambda replaces the **entire** environment on each update so you must include all existing variables — not just `ALLOWED_SENDERS`.
+
+**Step 1 — Get the current environment variables:**
+```bash
+aws lambda get-function-configuration \
+  --function-name email-pdf-ingest-EmailPdfProcessor \
+  --region us-east-1 \
+  --query "Environment.Variables" \
+  --output json
+```
+
+**Step 2 — Update with the full variable set including your changes:**
 ```bash
 aws lambda update-function-configuration \
   --function-name email-pdf-ingest-EmailPdfProcessor \
-  --environment "Variables={ALLOWED_SENDERS=<SENDER1_EMAIL>,<SENDER2_EMAIL>,RAW_EMAIL_BUCKET=email-pdf-ingest-raw-emails-staging,PDF_DESTINATION_BUCKET=<BUCKET_NAME>,PDF_PREFIX=pdfs/,REPLY_FROM=<NOREPLYFROMADDRESS>,SES_REGION=us-east-1,ADMIN_EMAIL=<ADMIN_EMAIL>,RECIPIENT_EMAIL=<RECIPIENTEMAILADDRESS>}" \
-  --region us-east-1
+  --region us-east-1 \
+  --environment "Variables={ALLOWED_SENDERS=<SENDER1_EMAIL>,<SENDER2_EMAIL>,RAW_EMAIL_BUCKET=email-pdf-ingest-raw-emails-staging,PDF_DESTINATION_BUCKET=<BUCKET_NAME>,PDF_PREFIX=pdfs/,REPLY_FROM=<NOREPLYFROMADDRESS>,SES_REGION=us-east-1,ADMIN_EMAIL=<ADMIN_EMAIL>,RECIPIENT_EMAIL=<RECIPIENTEMAILADDRESS>}"
 ```
 
-> Include ALL existing env vars — Lambda replaces the entire environment on each update.
+Use the output from Step 1 to fill in all variables, then modify `ALLOWED_SENDERS` as needed — add, remove, or update addresses in the comma-separated list.
+
+**Step 3 — If still in SES sandbox mode, verify any new address:**
+```bash
+aws sesv2 create-email-identity --email-identity <NEW_EMAIL> --region us-east-1
+```
+
+Click the verification link AWS sends to that address. This step is not required if your account has SES production access.
 
 ## Cost
 
