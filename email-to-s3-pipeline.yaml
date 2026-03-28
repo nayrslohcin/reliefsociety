@@ -308,7 +308,7 @@ Resources:
                       "message-id": msg_id,
                   },
               )
-              logger.info(f"Uploaded {key} ({len(data)} bytes)")
+              logger.info(f"Uploaded index.html ({len(data)} bytes)")
 
           def send_reply(to, subject):
               body = (
@@ -605,9 +605,11 @@ Resources:
       RuleSetName: !Sub "${AWS::StackName}-rules"
 
   # ── SES Receipt Rule ───────────────────────────────────────────────────────
-  # Two actions in sequence:
+  # Three actions in sequence:
   #   1. S3Action     → stores the raw MIME message in the staging bucket
   #   2. LambdaAction → invokes the processor asynchronously (Event mode)
+  #   3. StopAction   → stops further rule processing so the catch-all rule
+  #                     does not also invoke Lambda for the same message
   # DependsOn LambdaSESInvokePermission ensures the permission exists before
   # SES tries to validate it can call the function.
 
@@ -629,6 +631,8 @@ Resources:
           - LambdaAction:
               FunctionArn: !GetAtt EmailPdfProcessorFunction.Arn
               InvocationType: Event
+          - StopAction:
+              Scope: RuleSet
 
   # ── SES catch-all rule ─────────────────────────────────────────────────────
   # Matches any recipient not already handled by SESReceiptRule. The Lambda
