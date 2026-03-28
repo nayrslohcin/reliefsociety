@@ -1,0 +1,618 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Email-to-S3 PDF ingestion pipeline. Receives email via SES, validates the sender
+  against an allowlist, extracts PDF attachments, and uploads them to an existing
+  S3 bucket served through CloudFront with OAC. Replies to allowed senders when
+  no PDF is found.
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+
+Parameters:
+
+  PDFDestinationBucketName:
+    Type: String
+    Description: >
+      Name of the S3 bucket where PDFs will be stored.
+      This bucket will be created by the stack.
+
+  RecipientEmailAddress:
+    Type: String
+    Description: >
+      The email address that will receive inbound PDFs (e.g. pdfingest@yourdomain.com).
+      Must match a domain already verified in SES.
+
+  ReplyFromAddress:
+    Type: String
+    Description: >
+      Verified SES email identity used to send the "no PDF found" reply.
+      Must be a verified identity in your SES account.
+
+  AllowedSenders:
+    Type: String
+    Description: >
+      Comma-separated list of allowed sender email addresses (lowercase).
+      Emails from any other address are silently dropped.
+    Default: "sender@example.com"
+
+  PDFPrefix:
+    Type: String
+    Description: S3 key prefix (folder path) for uploaded PDFs inside the destination bucket.
+    Default: "pdfs/"
+
+  NameserversReady:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Set to false on first deploy. After updating the domain nameservers to the
+      values in the HostedZoneNameServers output and waiting for propagation,
+      redeploy with this set to true to activate the SSL certificate and custom domain.
+
+# ── Conditions ────────────────────────────────────────────────────────────────
+
+Conditions:
+  DnsReady: !Equals [!Ref NameserversReady, "true"]
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── Route 53 hosted zone ───────────────────────────────────────────────────
+  # Domain is derived from RecipientEmailAddress so no separate parameter is needed.
+  # IMPORTANT: After first deploy, update the domain's nameservers to the values
+  # in the HostedZoneNameServers stack output, then wait for propagation (up to 48h).
+
+  WebsiteHostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+
+  # ── Raw email staging bucket ───────────────────────────────────────────────
+  # SES deposits the raw MIME message here before Lambda processes it.
+  # Objects auto-expire after 7 days — they are only needed transiently.
+
+  RawEmailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-raw-emails-staging"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRawEmailsAfter7Days
+            Status: Enabled
+            ExpirationInDays: 7
+
+  RawEmailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawEmailBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSESPuts
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${RawEmailBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  # ── PDF destination bucket ─────────────────────────────────────────────────
+  # Created by this stack. Public access is blocked — objects are only
+  # accessible via CloudFront (OAC) or the Lambda role.
+
+  PDFDestinationBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref PDFDestinationBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  # ── IAM execution role for Lambda ─────────────────────────────────────────
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-EmailPdfProcessorRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EmailPdfProcessorPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadRawEmails
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${RawEmailBucket.Arn}/*"
+              - Sid: WritePDFs
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${PDFDestinationBucket.Arn}/index.html"
+              - Sid: SendReplyEmail
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+
+  # ── Lambda function ────────────────────────────────────────────────────────
+  # All configuration is passed through environment variables so the allowlist
+  # and other settings can be updated without redeploying code.
+
+  EmailPdfProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-EmailPdfProcessor"
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          RAW_EMAIL_BUCKET: !Ref RawEmailBucket
+          PDF_DESTINATION_BUCKET: !Ref PDFDestinationBucketName
+          PDF_PREFIX: !Ref PDFPrefix
+          ALLOWED_SENDERS: !Ref AllowedSenders
+          REPLY_FROM: !Ref ReplyFromAddress
+          SES_REGION: !Ref AWS::Region
+      Code:
+        ZipFile: |
+          import boto3, email, os, logging
+          from email import policy as ep
+          from datetime import datetime
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          s3 = boto3.client("s3")
+
+          def ses_client():
+              return boto3.client("ses", region_name=os.environ["SES_REGION"])
+
+          def lambda_handler(event, context):
+              allowed = set(os.environ.get("ALLOWED_SENDERS", "").lower().split(","))
+              for record in event.get("Records", []):
+                  mail = record.get("ses", {}).get("mail", {})
+                  msg_id = mail.get("messageId")
+                  if not msg_id:
+                      continue
+                  sender = mail.get("source", "").lower().strip()
+                  logger.info(f"Processing {msg_id} from {sender}")
+
+                  raw = fetch_raw(msg_id)
+                  if not raw:
+                      continue
+
+                  msg = email.message_from_bytes(raw, policy=ep.default)
+
+                  if sender not in allowed:
+                      logger.info(f"Rejected unauthorised sender: {sender}")
+                      continue  # Silently drop — no reply to unknown senders
+
+                  html = find_index_html(msg)
+                  if not html:
+                      logger.info(f"No index.html from {sender} — sending reply")
+                      send_reply(sender, msg.get("subject", "(no subject)"))
+                      continue
+
+                  upload_html(html, sender, msg_id)
+
+              return {"statusCode": 200}
+
+          def fetch_raw(msg_id):
+              try:
+                  r = s3.get_object(
+                      Bucket=os.environ["RAW_EMAIL_BUCKET"],
+                      Key=msg_id
+                  )
+                  return r["Body"].read()
+              except Exception as e:
+                  logger.error(f"S3 get failed for {msg_id}: {e}")
+                  return None
+
+          def find_index_html(msg):
+              for part in msg.walk():
+                  disp = str(part.get_content_disposition() or "").lower()
+                  fname = (part.get_filename() or "").strip()
+                  if "attachment" in disp and fname.lower() == "index.html":
+                      return part
+              return None
+
+          def upload_html(part, sender, msg_id):
+              data = part.get_payload(decode=True)
+              if not data:
+                  logger.warning("Empty index.html payload — skipping")
+                  return
+              s3.put_object(
+                  Bucket=os.environ["PDF_DESTINATION_BUCKET"],
+                  Key="index.html",
+                  Body=data,
+                  ContentType="text/html",
+                  Metadata={
+                      "sender": sender,
+                      "message-id": msg_id,
+                  },
+              )
+              logger.info(f"Uploaded {key} ({len(data)} bytes)")
+
+          def send_reply(to, subject):
+              body = (
+                  "Hello,\n\nYour email was received but did not contain an "
+                  "index.html attachment.\nPlease re-send with index.html attached.\n\n"
+                  "This is an automated message. Please do not reply."
+              )
+              try:
+                  ses_client().send_email(
+                      Source=os.environ["REPLY_FROM"],
+                      Destination={"ToAddresses": [to]},
+                      Message={
+                          "Subject": {
+                              "Data": f"Re: {subject} — missing index.html attachment",
+                              "Charset": "UTF-8",
+                          },
+                          "Body": {
+                              "Text": {"Data": body, "Charset": "UTF-8"}
+                          },
+                      },
+                  )
+                  logger.info(f"Sent reply to {to}")
+              except Exception as e:
+                  logger.error(f"Reply failed to {to}: {e}")
+
+  # ── Allow SES to invoke the Lambda function ────────────────────────────────
+
+  LambdaSESInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt EmailPdfProcessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  # ── ACM certificate ────────────────────────────────────────────────────────
+  # Must be in us-east-1 — CloudFront requires it regardless of stack region.
+  # DNS validation is automatic because the hosted zone is in the same account.
+
+  WebsiteCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: DnsReady
+    Properties:
+      DomainName: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      SubjectAlternativeNames:
+        - !Sub
+          - "www.${Domain}"
+          - Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+          HostedZoneId: !Ref WebsiteHostedZone
+        - DomainName: !Sub
+            - "www.${Domain}"
+            - Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+          HostedZoneId: !Ref WebsiteHostedZone
+
+  # ── CloudFront Response Headers Policy ─────────────────────────────────────
+  # Adds X-Robots-Tag: noindex, nofollow to all responses so search engines
+  # do not index the site or follow links.
+
+  SiteResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-ResponseHeadersPolicy"
+        CustomHeadersConfig:
+          Items:
+            - Header: X-Robots-Tag
+              Value: "noindex, nofollow"
+              Override: true
+
+  # ── CloudFront Origin Access Control ──────────────────────────────────────
+  # OAC restricts the PDF bucket so only CloudFront can issue GetObject calls.
+  # Direct S3 URLs will return 403. Lambda writes directly via the AWS SDK,
+  # bypassing CloudFront entirely (which is correct and intended).
+
+  PDFBucketOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-PDFBucketOAC"
+        Description: OAC for PDF destination bucket
+        SigningProtocol: sigv4
+        SigningBehavior: always
+        OriginAccessControlOriginType: s3
+
+  # ── CloudFront distribution ────────────────────────────────────────────────
+  # Uses the AWS-managed CachingOptimized cache policy (ID is a well-known constant).
+  # S3 static website hosting is NOT used — it is incompatible with OAC (which
+  # requires the REST endpoint). Index and error documents are handled by
+  # CloudFront's DefaultRootObject and CustomErrorResponses instead.
+  # Note: with OAC + a private bucket, missing objects return 403 (not 404),
+  # so both error codes are mapped to error.html.
+
+  PDFCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${AWS::StackName} PDF bucket distribution"
+        Enabled: true
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        Aliases: !If
+          - DnsReady
+          - - !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+            - !Sub
+              - "www.${Domain}"
+              - Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+          - !Ref AWS::NoValue
+        ViewerCertificate: !If
+          - DnsReady
+          - AcmCertificateArn: !Ref WebsiteCertificate
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: whitelist
+            Locations:
+              - US
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+        Origins:
+          - Id: pdf-s3-origin
+            DomainName: !GetAtt PDFDestinationBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ""   # Must be empty string when using OAC
+            OriginAccessControlId: !GetAtt PDFBucketOAC.Id
+        DefaultCacheBehavior:
+          TargetOriginId: pdf-s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          # AWS managed CachingOptimized policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+          ResponseHeadersPolicyId: !Ref SiteResponseHeadersPolicy
+
+  # ── PDF bucket policy ──────────────────────────────────────────────────────
+  # Applied to your EXISTING bucket. Two statements:
+  #   1. CloudFront OAC  → s3:GetObject  (read-only via distribution)
+  #   2. Lambda IAM role → s3:PutObject  (write to the pdfs/ prefix only)
+  # This resource will replace any existing bucket policy on the target bucket.
+
+  PDFBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: PDFCloudFrontDistribution
+    Properties:
+      Bucket: !Ref PDFDestinationBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOACRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${PDFDestinationBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub
+                  - "arn:aws:cloudfront::${AWS::AccountId}:distribution/${DistId}"
+                  - DistId: !GetAtt PDFCloudFrontDistribution.Id
+          - Sid: AllowLambdaPutObject
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt LambdaExecutionRole.Arn
+            Action: s3:PutObject
+            Resource: !Sub "${PDFDestinationBucket.Arn}/${PDFPrefix}*"
+
+  # ── Route 53 MX record ─────────────────────────────────────────────────────
+  # Routes inbound email for the domain to SES. The domain is derived from
+  # the RecipientEmailAddress parameter so no separate domain parameter is needed.
+
+  SESInboundMXRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: MX
+      TTL: 300
+      ResourceRecords:
+        - !Sub "10 inbound-smtp.${AWS::Region}.amazonaws.com"
+
+  # ── Route 53 A records → CloudFront ───────────────────────────────────────
+  # Apex and www both alias to the CloudFront distribution.
+  # Z2FDTNDATAQYW2 is the fixed hosted zone ID for all CloudFront distributions.
+
+  WebsiteApexRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DnsReady
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt PDFCloudFrontDistribution.DomainName
+        EvaluateTargetHealth: false
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  WebsiteWWWRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: DnsReady
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Sub
+        - "www.${Domain}"
+        - Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt PDFCloudFrontDistribution.DomainName
+        EvaluateTargetHealth: false
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  # ── SES domain identity + DKIM ────────────────────────────────────────────
+  # Verifies the domain in SES and enables DKIM signing.
+  # CloudFormation creates the identity and returns three DKIM tokens;
+  # the three CNAME records below publish them to Route 53 for verification.
+
+  SESEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      DkimAttributes:
+        SigningEnabled: true
+
+  SESDkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Sub
+        - "${Token}._domainkey.${Domain}"
+        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName1
+          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: CNAME
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt SESEmailIdentity.DkimDNSTokenValue1
+
+  SESDkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Sub
+        - "${Token}._domainkey.${Domain}"
+        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName2
+          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: CNAME
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt SESEmailIdentity.DkimDNSTokenValue2
+
+  SESDkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Sub
+        - "${Token}._domainkey.${Domain}"
+        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName3
+          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: CNAME
+      TTL: 300
+      ResourceRecords:
+        - !GetAtt SESEmailIdentity.DkimDNSTokenValue3
+
+  # ── SES Receipt Rule Set ───────────────────────────────────────────────────
+  # IMPORTANT: CloudFormation cannot set a rule set as active. After deploying,
+  # you must activate it manually — see the Outputs section for the name, then run:
+  #   aws ses set-active-receipt-rule-set --rule-set-name <RuleSetName>
+  # or activate it in the SES console under Configuration > Email receiving.
+
+  SESReceiptRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub "${AWS::StackName}-rules"
+
+  # ── SES Receipt Rule ───────────────────────────────────────────────────────
+  # Two actions in sequence:
+  #   1. S3Action     → stores the raw MIME message in the staging bucket
+  #   2. LambdaAction → invokes the processor asynchronously (Event mode)
+  # DependsOn LambdaSESInvokePermission ensures the permission exists before
+  # SES tries to validate it can call the function.
+
+  SESReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn: LambdaSESInvokePermission
+    Properties:
+      RuleSetName: !Ref SESReceiptRuleSet
+      Rule:
+        Name: EmailToPDFProcessor
+        Enabled: true
+        TlsPolicy: Optional
+        ScanEnabled: true
+        Recipients:
+          - !Ref RecipientEmailAddress
+        Actions:
+          - S3Action:
+              BucketName: !Ref RawEmailBucket
+          - LambdaAction:
+              FunctionArn: !GetAtt EmailPdfProcessorFunction.Arn
+              InvocationType: Event
+
+# ── Outputs ────────────────────────────────────────────────────────────────────
+
+Outputs:
+
+  HostedZoneId:
+    Description: Route 53 hosted zone ID
+    Value: !Ref WebsiteHostedZone
+
+  HostedZoneNameServers:
+    Description: >
+      Nameservers for the hosted zone. Update your domain registration to use
+      these nameservers — required for DNS, email, and SSL certificate validation.
+    Value: !Join [", ", !GetAtt WebsiteHostedZone.NameServers]
+
+  CloudFrontDomainName:
+    Description: CloudFront domain name — use this to access PDFs (e.g. https://<domain>/pdfs/file.pdf)
+    Value: !GetAtt PDFCloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (useful for cache invalidations)
+    Value: !GetAtt PDFCloudFrontDistribution.Id
+
+  LambdaFunctionArn:
+    Description: ARN of the PDF processor Lambda function
+    Value: !GetAtt EmailPdfProcessorFunction.Arn
+
+  LambdaFunctionName:
+    Description: Name of the Lambda function (for log tailing)
+    Value: !Ref EmailPdfProcessorFunction
+
+  RawEmailBucketName:
+    Description: Name of the raw email staging bucket
+    Value: !Ref RawEmailBucket
+
+  SESRuleSetName:
+    Description: >
+      SES receipt rule set name. ACTIVATE THIS MANUALLY after deploy:
+      aws ses set-active-receipt-rule-set --rule-set-name <this value>
+    Value: !Ref SESReceiptRuleSet
+
+  UpdateAllowedSendersCommand:
+    Description: >
+      CLI command to update the sender allowlist without redeploying.
+      Replace the address list as needed.
+    Value: !Sub
+      - "aws lambda update-function-configuration --function-name ${FnName} --environment 'Variables={ALLOWED_SENDERS=alice@example.com,bob@company.org,RAW_EMAIL_BUCKET=${RawEmailBucket},PDF_DESTINATION_BUCKET=${PDFDestinationBucketName},PDF_PREFIX=${PDFPrefix},REPLY_FROM=${ReplyFromAddress},SES_REGION=${AWS::Region}}'"
+      - FnName: !Ref EmailPdfProcessorFunction
