@@ -497,10 +497,7 @@ Resources:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref WebsiteHostedZone
-      Name: !Sub
-        - "${Token}._domainkey.${Domain}"
-        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName1
-          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Name: !Sub "${SESEmailIdentity.DkimDNSTokenName1}."
       Type: CNAME
       TTL: 300
       ResourceRecords:
@@ -510,10 +507,7 @@ Resources:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref WebsiteHostedZone
-      Name: !Sub
-        - "${Token}._domainkey.${Domain}"
-        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName2
-          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Name: !Sub "${SESEmailIdentity.DkimDNSTokenName2}."
       Type: CNAME
       TTL: 300
       ResourceRecords:
@@ -523,14 +517,29 @@ Resources:
     Type: AWS::Route53::RecordSet
     Properties:
       HostedZoneId: !Ref WebsiteHostedZone
-      Name: !Sub
-        - "${Token}._domainkey.${Domain}"
-        - Token: !GetAtt SESEmailIdentity.DkimDNSTokenName3
-          Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Name: !Sub "${SESEmailIdentity.DkimDNSTokenName3}."
       Type: CNAME
       TTL: 300
       ResourceRecords:
         - !GetAtt SESEmailIdentity.DkimDNSTokenValue3
+
+  # ── DMARC record ───────────────────────────────────────────────────────────
+  # p=none monitors only — no emails blocked. Tighten to p=quarantine or
+  # p=reject once you've confirmed legitimate mail is passing DKIM/SPF.
+
+  DMARCRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref WebsiteHostedZone
+      Name: !Sub
+        - "_dmarc.${Domain}."
+        - Domain: !Select [1, !Split ["@", !Ref RecipientEmailAddress]]
+      Type: TXT
+      TTL: 300
+      ResourceRecords:
+        - !Sub
+          - "\"v=DMARC1; p=none; rua=mailto:${ReplyFrom}\""
+          - ReplyFrom: !Ref ReplyFromAddress
 
   # ── SES Receipt Rule Set ───────────────────────────────────────────────────
   # IMPORTANT: CloudFormation cannot set a rule set as active. After deploying,
