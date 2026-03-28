@@ -24,6 +24,43 @@ Receives email via AWS SES, validates the sender against an allowlist, extracts 
 | `deploy-policy.json` | IAM policy required to deploy the stack |
 | `email-to-s3-setup-guide.md` | Step-by-step setup guide |
 
+## Variables
+
+Collect these values before running any deploy or update commands.
+
+| Variable | Description | Where to find it |
+|---|---|---|
+| `<YOUR_ACCOUNT_ID>` | 12-digit AWS account ID | AWS console → top-right account menu, or `aws sts get-caller-identity --query Account --output text` |
+| `<YOUR_DOMAIN>` | Your registered domain (e.g. `example.org`) | Route 53 → Registered domains |
+| `<BUCKET_NAME>` | S3 bucket name for the website | Choose a globally unique name, e.g. `my-bulletin-site` |
+| `<RECIPIENTEMAILADDRESS>` | Email address that receives bulletin submissions | e.g. `bulletin@example.org` |
+| `<NOREPLYFROMADDRESS>` | Verified SES address used to send automated replies | e.g. `noreply@example.org` |
+| `<SENDER1_EMAIL>` | First allowed sender email address | Known to you |
+| `<SENDER2_EMAIL>` | Second allowed sender email address | Known to you |
+| `<ADMIN_EMAIL>` | Email that receives unauthorized sender alerts | Known to you |
+
+### Variables stored in Lambda environment
+
+Once deployed, the following variables can be retrieved directly from the Lambda function rather than tracked separately:
+
+```bash
+aws lambda get-function-configuration \
+  --function-name email-pdf-ingest-EmailPdfProcessor \
+  --region us-east-1 \
+  --query "Environment.Variables" \
+  --output table
+```
+
+| Lambda Variable | Corresponds to |
+|---|---|
+| `ALLOWED_SENDERS` | `<SENDER1_EMAIL>,<SENDER2_EMAIL>` |
+| `RECIPIENT_EMAIL` | `<RECIPIENTEMAILADDRESS>` |
+| `REPLY_FROM` | `<NOREPLYFROMADDRESS>` |
+| `ADMIN_EMAIL` | `<ADMIN_EMAIL>` |
+| `PDF_DESTINATION_BUCKET` | `<BUCKET_NAME>` |
+| `RAW_EMAIL_BUCKET` | Staging bucket — auto-named `email-pdf-ingest-raw-emails-staging` |
+| `SES_REGION` | AWS region the stack was deployed to |
+
 ## Prerequisites
 
 - AWS account with the `EmailPdfIngestDeploy` IAM policy attached to your user
