@@ -148,7 +148,7 @@ Resources:
               - Sid: WritePDFs
                 Effect: Allow
                 Action: s3:PutObject
-                Resource: !Sub "${PDFDestinationBucket.Arn}/index.html"
+                Resource: !Sub "${PDFDestinationBucket.Arn}/rsbulletin.html"
               - Sid: SendReplyEmail
                 Effect: Allow
                 Action:
@@ -234,7 +234,7 @@ Resources:
 
                   html = find_index_html(msg)
                   if not html:
-                      logger.info(f"No index.html from {sender} — sending reply")
+                      logger.info(f"No rsbulletin.html from {sender} — sending reply")
                       send_reply(sender, msg.get("subject", "(no subject)"))
                       continue
 
@@ -289,18 +289,18 @@ Resources:
               for part in msg.walk():
                   disp = str(part.get_content_disposition() or "").lower()
                   fname = (part.get_filename() or "").strip()
-                  if "attachment" in disp and fname.lower() == "index.html":
+                  if "attachment" in disp and fname.lower() == "rsbulletin.html":
                       return part
               return None
 
           def upload_html(part, sender, msg_id):
               data = part.get_payload(decode=True)
               if not data:
-                  logger.warning("Empty index.html payload — skipping")
+                  logger.warning("Empty rsbulletin.html payload — skipping")
                   return
               s3.put_object(
                   Bucket=os.environ["PDF_DESTINATION_BUCKET"],
-                  Key="index.html",
+                  Key="rsbulletin.html",
                   Body=data,
                   ContentType="text/html",
                   Metadata={
@@ -308,12 +308,12 @@ Resources:
                       "message-id": msg_id,
                   },
               )
-              logger.info(f"Uploaded index.html ({len(data)} bytes)")
+              logger.info(f"Uploaded rsbulletin.html ({len(data)} bytes)")
 
           def send_reply(to, subject):
               body = (
                   "Hello,\n\nYour email was received but did not contain an "
-                  "index.html attachment.\nPlease re-send with index.html attached.\n\n"
+                  "rsbulletin.html attachment.\nPlease re-send with rsbulletin.html attached.\n\n"
                   "This is an automated message. Please do not reply."
               )
               try:
@@ -322,7 +322,7 @@ Resources:
                       Destination={"ToAddresses": [to]},
                       Message={
                           "Subject": {
-                              "Data": f"Re: {subject} — missing index.html attachment",
+                              "Data": f"Re: {subject} — missing rsbulletin.html attachment",
                               "Charset": "UTF-8",
                           },
                           "Body": {
@@ -411,7 +411,7 @@ Resources:
         Comment: !Sub "${AWS::StackName} PDF bucket distribution"
         Enabled: true
         HttpVersion: http2
-        DefaultRootObject: index.html
+        DefaultRootObject: rsbulletin.html
         Aliases: !If
           - DnsReady
           - - !Select [1, !Split ["@", !Ref RecipientEmailAddress]]

@@ -212,11 +212,14 @@ aws lambda get-function-configuration \
 ```
 
 **Step 2 — Update with the full variable set including your changes:**
+
+> Use JSON format (single quotes) — the shorthand `Variables={...}` syntax fails on email addresses containing `@` and `.`.
+
 ```bash
 aws lambda update-function-configuration \
   --function-name email-pdf-ingest-EmailPdfProcessor \
   --region us-east-1 \
-  --environment "Variables={ALLOWED_SENDERS=<SENDER1_EMAIL>,<SENDER2_EMAIL>,RAW_EMAIL_BUCKET=email-pdf-ingest-raw-emails-staging,PDF_DESTINATION_BUCKET=<BUCKET_NAME>,PDF_PREFIX=pdfs/,REPLY_FROM=<NOREPLYFROMADDRESS>,SES_REGION=us-east-1,ADMIN_EMAIL=<ADMIN_EMAIL>,RECIPIENT_EMAIL=<RECIPIENTEMAILADDRESS>}"
+  --environment '{"Variables":{"ALLOWED_SENDERS":"<SENDER1_EMAIL>,<SENDER2_EMAIL>","RAW_EMAIL_BUCKET":"email-pdf-ingest-raw-emails-staging","PDF_DESTINATION_BUCKET":"<BUCKET_NAME>","PDF_PREFIX":"pdfs/","REPLY_FROM":"<NOREPLYFROMADDRESS>","SES_REGION":"us-east-1","ADMIN_EMAIL":"<ADMIN_EMAIL>","RECIPIENT_EMAIL":"<RECIPIENTEMAILADDRESS>"}}'
 ```
 
 Use the output from Step 1 to fill in all variables, then modify `ALLOWED_SENDERS` as needed — add, remove, or update addresses in the comma-separated list.
