@@ -61,6 +61,20 @@ aws lambda get-function-configuration \
 | `RAW_EMAIL_BUCKET` | Staging bucket — auto-named `email-pdf-ingest-raw-emails-staging` |
 | `SES_REGION` | AWS region the stack was deployed to |
 
+## AWS Profile
+
+All CLI commands in this guide require the correct AWS profile to be set. Run this before executing any commands:
+
+```bash
+export AWS_PROFILE=<IAM_USER>
+```
+
+Replace `<IAM_USER>` with the profile name configured in `~/.aws/credentials` that has the `EmailPdfIngestDeploy` policy attached. You can verify the active identity with:
+
+```bash
+aws sts get-caller-identity
+```
+
 ## Prerequisites
 
 - AWS account with the `EmailPdfIngestDeploy` IAM policy attached to your user
