@@ -149,6 +149,10 @@ Resources:
                 Effect: Allow
                 Action: s3:PutObject
                 Resource: !Sub "${PDFDestinationBucket.Arn}/rsbulletin.html"
+              - Sid: InvalidateCloudFront
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${PDFCloudFrontDistribution}"
               - Sid: SendReplyEmail
                 Effect: Allow
                 Action:
@@ -186,6 +190,7 @@ Resources:
           SES_REGION: !Ref AWS::Region
           ADMIN_EMAIL: !Ref AdminEmail
           RECIPIENT_EMAIL: !Ref RecipientEmailAddress
+          CLOUDFRONT_DISTRIBUTION_ID: !Ref PDFCloudFrontDistribution
       Code:
         ZipFile: |
           import boto3, email, os, logging
@@ -196,6 +201,7 @@ Resources:
           logger.setLevel(logging.INFO)
 
           s3 = boto3.client("s3")
+          cf = boto3.client("cloudfront")
 
           def ses_client():
               return boto3.client("ses", region_name=os.environ["SES_REGION"])
@@ -309,6 +315,16 @@ Resources:
                   },
               )
               logger.info(f"Uploaded rsbulletin.html ({len(data)} bytes)")
+              dist_id = os.environ.get("CLOUDFRONT_DISTRIBUTION_ID", "")
+              if dist_id:
+                  cf.create_invalidation(
+                      DistributionId=dist_id,
+                      InvalidationBatch={
+                          "Paths": {"Quantity": 1, "Items": ["/rsbulletin.html"]},
+                          "CallerReference": msg_id,
+                      },
+                  )
+                  logger.info(f"CloudFront invalidation created for /rsbulletin.html")
 
           def send_reply(to, subject):
               body = (
