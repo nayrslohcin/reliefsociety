@@ -228,8 +228,10 @@ Resources:
                       continue
 
                   if sender not in allowed:
-                      logger.info(f"Rejected unauthorised sender: {sender}")
-                      notify_admin(admin, sender, recipients, "unauthorized_sender")
+                      logger.info(f"Rejected unauthorised sender: {sender} — forwarding to admin")
+                      raw = fetch_raw(msg_id)
+                      if raw:
+                          forward_to_admin(raw, sender, admin)
                       continue
 
                   raw = fetch_raw(msg_id)
@@ -248,25 +250,49 @@ Resources:
 
               return {"statusCode": 200}
 
+          def forward_to_admin(raw, sender, admin):
+              if not admin:
+                  return
+              try:
+                  msg = email.message_from_bytes(raw, policy=ep.compat32)
+                  orig_subject = msg.get("Subject", "(no subject)")
+                  orig_body = ""
+                  if msg.is_multipart():
+                      for part in msg.walk():
+                          if part.get_content_type() == "text/plain" and not orig_body:
+                              orig_body = part.get_payload(decode=True).decode("utf-8", errors="replace")
+                  else:
+                      orig_body = msg.get_payload(decode=True).decode("utf-8", errors="replace")
+                  body = (
+                      f"The following email was received from an unauthorized sender "
+                      f"and has been forwarded for your review.\n\n"
+                      f"From: {sender}\n"
+                      f"Subject: {orig_subject}\n"
+                      f"{'─' * 40}\n\n"
+                      f"{orig_body}"
+                  )
+                  ses_client().send_email(
+                      Source=os.environ["REPLY_FROM"],
+                      Destination={"ToAddresses": [admin]},
+                      Message={
+                          "Subject": {"Data": f"Fwd from {sender}: {orig_subject}", "Charset": "UTF-8"},
+                          "Body": {"Text": {"Data": body, "Charset": "UTF-8"}},
+                      },
+                  )
+                  logger.info(f"Forwarded email from {sender} to admin {admin}")
+              except Exception as e:
+                  logger.error(f"Forward to admin failed: {e}")
+
           def notify_admin(admin, sender, recipients, reason):
               if not admin:
                   return
-              if reason == "unauthorized_sender":
-                  subject = "Unauthorized sender alert"
-                  body = (
-                      f"An unauthorized sender sent an email to "
-                      f"bulletin@plano4reliefsocietybulletin.org.\n\n"
-                      f"Sender: {sender}\n\n"
-                      "This is an automated notification."
-                  )
-              else:
-                  subject = "Wrong recipient alert"
-                  body = (
-                      f"An email was received for an unexpected recipient.\n\n"
-                      f"Sender: {sender}\n"
-                      f"Recipients: {', '.join(recipients)}\n\n"
-                      "This is an automated notification."
-                  )
+              subject = "Wrong recipient alert"
+              body = (
+                  f"An email was received for an unexpected recipient.\n\n"
+                  f"Sender: {sender}\n"
+                  f"Recipients: {', '.join(recipients)}\n\n"
+                  "This is an automated notification."
+              )
               try:
                   ses_client().send_email(
                       Source=os.environ["REPLY_FROM"],
@@ -325,6 +351,28 @@ Resources:
                       },
                   )
                   logger.info(f"CloudFront invalidation created for /rsbulletin.html")
+              admin = os.environ.get("ADMIN_EMAIL", "").strip()
+              if admin:
+                  try:
+                      ses_client().send_email(
+                          Source=os.environ["REPLY_FROM"],
+                          Destination={"ToAddresses": [admin]},
+                          Message={
+                              "Subject": {"Data": "Bulletin updated successfully", "Charset": "UTF-8"},
+                              "Body": {"Text": {
+                                  "Data": (
+                                      f"A new bulletin has been received and published.\n\n"
+                                      f"Sender: {sender}\n"
+                                      f"File: rsbulletin.html ({len(data)} bytes)\n\n"
+                                      "The site has been updated and the CloudFront cache cleared."
+                                  ),
+                                  "Charset": "UTF-8",
+                              }},
+                          },
+                      )
+                      logger.info(f"Admin notified of successful upload at {admin}")
+                  except Exception as e:
+                      logger.error(f"Admin upload notification failed: {e}")
 
           def send_reply(to, subject):
               body = (
