@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plano 4th Ward Relief Society Bulletin Editor</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0ede8;color:#1a1a1a;min-height:100vh;}
+.app-header{background:#3D5A47;color:white;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;}
+.app-header h1{font-size:18px;font-weight:600;}
+.app-header p{font-size:12px;opacity:0.7;margin-top:2px;}
+.header-btns{display:flex;gap:8px;}
+.btn-save{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:white;padding:8px 16px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;}
+.btn-save:hover{background:rgba(255,255,255,0.25);}
+.btn-generate{background:white;border:none;color:#3D5A47;padding:8px 18px;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;}
+.btn-generate:hover{background:#f0f7f2;}
+.tabs{background:white;border-bottom:1px solid #ddd;padding:0 24px;display:flex;overflow-x:auto;gap:0;position:sticky;top:57px;z-index:99;}
+.tab{padding:12px 14px;font-size:13px;font-weight:500;color:#777;cursor:pointer;border-bottom:2.5px solid transparent;white-space:nowrap;}
+.tab.active{color:#3D5A47;border-bottom-color:#3D5A47;}
+.tab:hover:not(.active){color:#333;}
+.content{max-width:760px;margin:0 auto;padding:24px 24px 80px;}
+.section{display:none;}
+.section.active{display:block;}
+.section-title{font-size:15px;font-weight:700;color:#3D5A47;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #e0ede3;}
+.hint{font-size:12px;color:#888;margin-bottom:16px;}
+.card{background:white;border-radius:10px;border:1px solid #e0e0e0;padding:16px;margin-bottom:10px;}
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+.card-num{font-size:11px;font-weight:700;color:#3D5A47;text-transform:uppercase;letter-spacing:0.5px;}
+.rm-btn{background:none;border:1px solid #e0e0e0;border-radius:6px;padding:3px 10px;font-size:12px;color:#aaa;cursor:pointer;}
+.rm-btn:hover{border-color:#e55;color:#e55;}
+label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:4px;}
+input,textarea,select{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:7px;font-size:13.5px;font-family:inherit;background:#fff;color:#1a1a1a;}
+input:focus,textarea:focus{outline:none;border-color:#3D5A47;box-shadow:0 0 0 2px rgba(61,90,71,0.1);}
+textarea{resize:vertical;min-height:56px;line-height:1.5;}
+.f{margin-bottom:11px;}
+.r2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.r3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.r4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;}
+.add-btn{display:block;width:100%;background:none;border:1.5px dashed #b0c9b7;border-radius:9px;padding:10px;color:#5a8a6a;font-size:13px;font-weight:600;cursor:pointer;margin-top:4px;}
+.add-btn:hover{background:#f0f7f2;border-color:#3D5A47;color:#3D5A47;}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2d4435;color:white;padding:9px 22px;border-radius:20px;font-size:13px;font-weight:500;opacity:0;transition:opacity 0.3s;pointer-events:none;z-index:999;}
+.toast.show{opacity:1;}
+.static-block{background:white;border-radius:10px;border:1px solid #e0e0e0;padding:16px;margin-bottom:14px;}
+.static-block h4{font-size:12px;font-weight:700;color:#3D5A47;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;}
+.link-hint{font-size:11px;color:#aaa;font-style:italic;margin-bottom:8px;}
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <div>
+    <h1>Relief Society Bulletin Editor</h1>
+    <p>Plano 4th Ward &mdash; fill in fields and click Generate Bulletin</p>
+  </div>
+  <div class="header-btns">
+    <button class="btn-save" onclick="saveData()">Save Progress</button>
+    <button class="btn-generate" onclick="generateNewsletter()">&darr; Generate Bulletin</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('tab-header',this)">Header</div>
+  <div class="tab" onclick="showTab('tab-week',this)">This Week</div>
+  <div class="tab" onclick="showTab('tab-bdays',this)">Birthdays</div>
+  <div class="tab" onclick="showTab('tab-upcoming',this)">Upcoming Events</div>
+  <div class="tab" onclick="showTab('tab-lessons',this)">Lessons</div>
+  <div class="tab" onclick="showTab('tab-mission',this)">Missionaries</div>
+  <div class="tab" onclick="showTab('tab-resources',this)">Resources</div>
+  <div class="tab" onclick="showTab('tab-contacts',this)">Contacts</div>
+</div>
+
+<div class="content">
+
+  <!-- HEADER TAB -->
+  <div id="tab-header" class="section active">
+    <div class="section-title">Bulletin Header</div>
+    <div class="card">
+      <div class="f"><label>Bulletin Date (shown in header)</label><input id="nl-date" value="March 22, 2026"></div>
+      <div class="f"><label>Month Label (shown in footer)</label><input id="nl-month" value="March 2026"></div>
+    </div>
+  </div>
+
+  <!-- THIS WEEK TAB -->
+  <div id="tab-week" class="section">
+    <div class="section-title">This Week's Events</div>
+    <p class="hint">Add each event happening this week. Day = Mon/Tue/etc, Date = number (e.g. 24), Month = Mar/Apr/etc.</p>
+    <div id="week-events"></div>
+    <button class="add-btn" onclick="addEvent('week')">+ Add Event</button>
+  </div>
+
+  <!-- BIRTHDAYS TAB -->
+  <div id="tab-bdays" class="section">
+    <div class="section-title">Upcoming Birthdays</div>
+    <p class="hint">Add birthdays for this period. They display in a 3-column grid.</p>
+    <div id="birthdays"></div>
+    <button class="add-btn" onclick="addBirthday()">+ Add Birthday</button>
+  </div>
+
+  <!-- UPCOMING EVENTS TAB -->
+  <div id="tab-upcoming" class="section">
+    <div class="section-title">Upcoming Events</div>
+    <p class="hint">Events happening in the coming weeks. These display with a gold accent.</p>
+    <div id="upcoming-events"></div>
+    <button class="add-btn" onclick="addEvent('upcoming')">+ Add Upcoming Event</button>
+  </div>
+
+  <!-- LESSONS TAB -->
+  <div id="tab-lessons" class="section">
+    <div class="section-title">Relief Society Lessons</div>
+    <div id="lessons"></div>
+    <button class="add-btn" onclick="addLesson()">+ Add Lesson</button>
+  </div>
+
+  <!-- MISSIONARIES TAB -->
+  <div id="tab-mission" class="section">
+    <div class="section-title">Feed the Missionaries</div>
+    <p class="hint">Add one or more missionary contacts. Each will appear as a contact card in the bulletin.</p>
+    <div id="missionaries"></div>
+    <button class="add-btn" onclick="addMissionary()">+ Add Missionary Contact</button>
+    <div class="card" style="margin-top:12px;">
+      <div class="card-head"><span class="card-num">Special Note (optional)</span></div>
+      <p class="link-hint">This text will appear above the standard description in the bulletin. Leave blank if not needed.</p>
+      <div class="f"><textarea id="miss-note" placeholder="e.g. We are especially in need of dinner hosts this month — thank you for your generosity!" style="min-height:72px;"></textarea></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="card-num">Sign-Up Link (optional)</span></div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text</label><input id="miss-link-text" placeholder="e.g. Sign Up Here"></div>
+        <div class="f"><label>URL</label><input id="miss-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RESOURCES TAB -->
+  <div id="tab-resources" class="section">
+    <div class="section-title">Resources & Information</div>
+    <div class="static-block">
+      <h4>Family History Center</h4>
+      <div class="r2">
+        <div class="f"><label>Address</label><input id="fhc-addr" value="Plano Stake Center &mdash; 2700 Roundrock Trail, Plano"></div>
+        <div class="f"><label>Hours</label><input id="fhc-hours" value="Tue 9:15 AM&ndash;8:30 PM  |  Wed 9:15 AM&ndash;1:00 PM  |  Thu 9:15 AM&ndash;8:30 PM"></div>
+      </div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text (optional)</label><input id="fhc-link-text" placeholder="e.g. Schedule Appointment"></div>
+        <div class="f"><label>URL</label><input id="fhc-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+    <div class="static-block">
+      <h4>Home Storage Center</h4>
+      <div class="r2">
+        <div class="f"><label>Address</label><input id="hsc-addr" value="1100 W. Jackson Rd, Carrollton &mdash; 972-242-8595"></div>
+        <div class="f"><label>Hours</label><input id="hsc-hours" value="Tue 3:00&ndash;7:00 PM  |  Sat 10:00 AM&ndash;2:00 PM"></div>
+      </div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text (optional)</label><input id="hsc-link-text" placeholder="e.g. Place an Order"></div>
+        <div class="f"><label>URL</label><input id="hsc-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+    <div class="static-block">
+      <h4>JustServe</h4>
+      <div class="r2">
+        <div class="f"><label>Contact Name</label><input id="js-name" value="Second Counselor Name"></div>
+        <div class="f"><label>Phone</label><input id="js-phone" value="555-555-0103"></div>
+      </div>
+      <div class="f"><label>Email</label><input id="js-email" value="counselor2@example.org"></div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text (optional)</label><input id="js-link-text" placeholder="e.g. Find Projects"></div>
+        <div class="f"><label>URL</label><input id="js-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+    <div class="static-block">
+      <h4>Single Adults 36+</h4>
+      <div class="r2">
+        <div class="f"><label>Website</label><input id="sa-site" value="texasldssingles.com"></div>
+        <div class="f"><label>Save the Date</label><input id="sa-date" value="Sat Apr 11, 6:00 PM"></div>
+      </div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text (optional)</label><input id="sa-link-text" placeholder="e.g. View Calendar"></div>
+        <div class="f"><label>URL</label><input id="sa-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+    <div class="static-block">
+      <h4>Young Single Adults (18&ndash;35)</h4>
+      <div class="f"><label>Details</label><input id="ysa-info" value="Dallas YSA Ward &mdash; Sundays 12:30 PM  &middot;  Institute &mdash; Thursdays 7:30 PM  &middot;  Meandering Way Building"></div>
+      <p class="link-hint">Leave URL blank if no link needed.</p>
+      <div class="r2">
+        <div class="f"><label>Link Text (optional)</label><input id="ysa-link-text" placeholder="e.g. Learn More"></div>
+        <div class="f"><label>URL</label><input id="ysa-link-url" placeholder="https://..."></div>
+      </div>
+    </div>
+    <div class="section-title" style="margin-top:24px;">Additional Resources</div>
+    <p class="hint">Add any extra resources as needed each week. Leave blank to omit from the bulletin.</p>
+    <div id="extra-resources"></div>
+    <button class="add-btn" onclick="addExtraResource()">+ Add Resource</button>
+  </div>
+
+  <!-- CONTACTS TAB -->
+  <div id="tab-contacts" class="section">
+    <div class="section-title">Leadership Contacts</div>
+    <p class="hint">Update names, phones, and emails for leadership. Leave phone or email blank to hide it.</p>
+    <div id="contacts"></div>
+    <button class="add-btn" onclick="addContact()">+ Add Contact</button>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var DEFAULT = {
+  weekEvents:[
+    {day:"Tue",date:"24",month:"Mar",title:"CES Edventure Overview",detail:"Richardson Stake Center - 900 South Bowser Rd, Richardson\nFor youth ages 11-18 & their parents",time:"7:00-8:00 PM",link:"",linkText:""},
+    {day:"Wed",date:"25",month:"Mar",title:"Stake Youth Activity",detail:"Roundrock Building",time:"7:00-8:30 PM",link:"",linkText:""},
+    {day:"Fri-Sat",date:"27-28",month:"Mar",title:"Stake Primary Family Campout",detail:"Raptor Center - 1625 Brockdale Park Rd, Allen",time:"Fri 4:00 PM - Sat 10:00 AM",link:"",linkText:""},
+    {day:"Sat",date:"28",month:"Mar",title:"Stake Always Remember Him Easter Walk",detail:"Los Rios Building - 3401 Los Rios Blvd, Plano",time:"4:00-8:00 PM",link:"",linkText:""},
+    {day:"Sat",date:"28",month:"Mar",title:"4th Ward Easter Celebration",detail:"Legacy Church Building - Dinner & Program\nPotluck dinner sign-up available online",time:"6:00-7:30 PM",link:"",linkText:""}
+  ],
+  birthdays:[
+    {name:"Member Name 1",date:"March 21"},
+    {name:"Member Name 2",date:"March 22"},
+    {name:"Member Name 3",date:"March 23"},
+    {name:"Member Name 4",date:"March 29"},
+    {name:"Member Name 5",date:"March 30"},
+    {name:"Member Name 6",date:"March 31"}
+  ],
+  upcomingEvents:[
+    {day:"Sun-Sun",date:"29-5",month:"Mar-Apr",title:"Holy Week - Churchwide Events",detail:"A week of celebration remembering the last week of Jesus Christ's mortal life.\nLinks & details available online.",time:"",link:"",linkText:""},
+    {day:"Sat",date:"4",month:"Apr",title:"General Conference",detail:"",time:"11:00 AM-1:00 PM  |  3:00-5:00 PM",link:"",linkText:""},
+    {day:"Sun",date:"5",month:"Apr",title:"General Conference",detail:"",time:"11:00 AM-1:00 PM  |  3:00-5:00 PM",link:"",linkText:""}
+  ],
+  lessons:[
+    {date:"March 22",title:"Forsake Not Your Own Mercy",speaker:"Elder Matthew S. Holland - Text & Video available",link:"",linkText:""},
+    {date:"April 12",title:"They Are Their Own Judges",speaker:"Elder David A. Bednar - Text & Video available",link:"",linkText:""}
+  ],
+  contacts:[
+    {role:"President",name:"President Name",phone:"555-555-0101",email:"president@example.org"},
+    {role:"1st Counselor",name:"First Counselor Name",phone:"555-555-0102",email:"counselor1@example.org"},
+    {role:"2nd Counselor",name:"Second Counselor Name",phone:"555-555-0103",email:"counselor2@example.org"},
+    {role:"Secretary",name:"Secretary Name",phone:"555-555-0104",email:"secretary@example.org"},
+    {role:"Newsletter",name:"Newsletter Editor Name",phone:"555-555-0105",email:"newsletter@example.org"},
+    {role:"Service Coordinator",name:"TBD",phone:"",email:""}
+  ],
+  extraResources:[],
+  missionaries:[],
+  missLink:{linkText:'',linkUrl:''},
+  header:{nlDate:'March 22, 2026',nlMonth:'March 2026'},
+  resources:{
+    fhcAddr:'Plano Stake Center \u2014 2700 Roundrock Trail, Plano',
+    fhcHours:'Tue 9:15 AM\u20138:30 PM  |  Wed 9:15 AM\u20131:00 PM  |  Thu 9:15 AM\u20138:30 PM',
+    fhcLinkText:'',fhcLinkUrl:'',
+    hscAddr:'1100 W. Jackson Rd, Carrollton \u2014 972-242-8595',
+    hscHours:'Tue 3:00\u20137:00 PM  |  Sat 10:00 AM\u20132:00 PM',
+    hscLinkText:'',hscLinkUrl:'',
+    jsName:'Second Counselor Name',jsPhone:'555-555-0103',jsEmail:'counselor2@example.org',
+    jsLinkText:'',jsLinkUrl:'',
+    saDate:'Sat Apr 11, 6:00 PM',saSite:'texasldssingles.com',
+    saLinkText:'',saLinkUrl:'',
+    ysaInfo:'Dallas YSA Ward \u2014 Sundays 12:30 PM  \u00b7  Institute \u2014 Thursdays 7:30 PM  \u00b7  Meandering Way Building',
+    ysaLinkText:'',ysaLinkUrl:''
+  }
+};
+
+var state = JSON.parse(JSON.stringify(DEFAULT));
+try{var s=localStorage.getItem('rs_bulletin');if(s){state=JSON.parse(s);}}catch(e){}
+// Migrate old missionaries format (single object -> array)
+if(state.missionaries && !Array.isArray(state.missionaries)){
+  var _old=state.missionaries;
+  state.missionaries=[{name:_old.m1Name||'',phone:_old.m1Phone||'',email:_old.m1Email||''}];
+  state.missLink={linkText:_old.missLinkText||'',linkUrl:_old.missLinkUrl||''};
+}
+if(!state.missionaries)state.missionaries=[];
+if(!state.missLink)state.missLink={linkText:'',linkUrl:''};
+if(!state.header)state.header={nlDate:'March 22, 2026',nlMonth:'March 2026'};
+if(!state.resources)state.resources=JSON.parse(JSON.stringify(DEFAULT.resources));
+
+function showTab(id,el){
+  document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  document.getElementById(id).classList.add('active');
+  el.classList.add('active');
+}
+
+function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show');},2000);}
+
+function saveData(){
+  collectState();
+  try{localStorage.setItem('rs_bulletin',JSON.stringify(state));toast('Saved!');}
+  catch(e){toast('Could not save.');}
+}
+
+function collectState(){
+  state.weekEvents=collectEvents('week');
+  state.birthdays=collectBirthdays();
+  state.upcomingEvents=collectEvents('upcoming');
+  state.lessons=collectLessons();
+  state.contacts=collectContacts();
+  state.extraResources=collectExtraResources();
+  state.missionaries=collectMissionaries();
+  state.missLink={linkText:document.getElementById('miss-link-text').value,linkUrl:document.getElementById('miss-link-url').value,note:document.getElementById('miss-note').value};
+  state.header={
+    nlDate:document.getElementById('nl-date').value,
+    nlMonth:document.getElementById('nl-month').value
+  };
+  state.resources={
+    fhcAddr:document.getElementById('fhc-addr').value,
+    fhcHours:document.getElementById('fhc-hours').value,
+    fhcLinkText:document.getElementById('fhc-link-text').value,
+    fhcLinkUrl:document.getElementById('fhc-link-url').value,
+    hscAddr:document.getElementById('hsc-addr').value,
+    hscHours:document.getElementById('hsc-hours').value,
+    hscLinkText:document.getElementById('hsc-link-text').value,
+    hscLinkUrl:document.getElementById('hsc-link-url').value,
+    jsName:document.getElementById('js-name').value,
+    jsPhone:document.getElementById('js-phone').value,
+    jsEmail:document.getElementById('js-email').value,
+    jsLinkText:document.getElementById('js-link-text').value,
+    jsLinkUrl:document.getElementById('js-link-url').value,
+    saDate:document.getElementById('sa-date').value,
+    saSite:document.getElementById('sa-site').value,
+    saLinkText:document.getElementById('sa-link-text').value,
+    saLinkUrl:document.getElementById('sa-link-url').value,
+    ysaInfo:document.getElementById('ysa-info').value,
+    ysaLinkText:document.getElementById('ysa-link-text').value,
+    ysaLinkUrl:document.getElementById('ysa-link-url').value
+  };
+}
+function collectMissionaries(){
+  return Array.from(document.querySelectorAll('[data-type="missionary"]')).map(function(c){return{
+    name:c.querySelector('[data-f="name"]').value,
+    phone:c.querySelector('[data-f="phone"]').value,
+    email:c.querySelector('[data-f="email"]').value
+  };});
+}
+
+function collectExtraResources(){
+  return Array.from(document.querySelectorAll('[data-type="extra-resource"]')).map(function(c){return{
+    title:c.querySelector('[data-f="title"]').value,
+    detail:c.querySelector('[data-f="detail"]').value,
+    linkText:c.querySelector('[data-f="linkText"]').value,
+    link:c.querySelector('[data-f="link"]').value
+  };});
+}
+
+function collectEvents(prefix){
+  var cards=document.querySelectorAll('[data-type="'+prefix+'"]');
+  return Array.from(cards).map(function(c){return{
+    day:c.querySelector('[data-f="day"]').value,
+    date:c.querySelector('[data-f="date"]').value,
+    month:c.querySelector('[data-f="month"]').value,
+    title:c.querySelector('[data-f="title"]').value,
+    detail:c.querySelector('[data-f="detail"]').value,
+    time:c.querySelector('[data-f="time"]').value,
+    link:c.querySelector('[data-f="link"]').value,
+    linkText:c.querySelector('[data-f="linkText"]').value
+  };});
+}
+function collectBirthdays(){
+  return Array.from(document.querySelectorAll('[data-type="bday"]')).map(function(c){return{
+    name:c.querySelector('[data-f="name"]').value,
+    date:c.querySelector('[data-f="date"]').value
+  };});
+}
+function collectLessons(){
+  return Array.from(document.querySelectorAll('[data-type="lesson"]')).map(function(c){return{
+    date:c.querySelector('[data-f="date"]').value,
+    title:c.querySelector('[data-f="title"]').value,
+    speaker:c.querySelector('[data-f="speaker"]').value,
+    link:c.querySelector('[data-f="link"]').value,
+    linkText:c.querySelector('[data-f="linkText"]').value
+  };});
+}
+function collectContacts(){
+  return Array.from(document.querySelectorAll('[data-type="contact"]')).map(function(c){return{
+    role:c.querySelector('[data-f="role"]').value,
+    name:c.querySelector('[data-f="name"]').value,
+    phone:c.querySelector('[data-f="phone"]').value,
+    email:c.querySelector('[data-f="email"]').value
+  };});
+}
+
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function renderEventCard(ev,prefix,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type=prefix;
+  d.innerHTML='<div class="card-head"><span class="card-num">Event '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r4">'
+  +'<div class="f"><label>Day</label><input data-f="day" value="'+esc(ev.day)+'" placeholder="Tue"></div>'
+  +'<div class="f"><label>Date #</label><input data-f="date" value="'+esc(ev.date)+'" placeholder="24"></div>'
+  +'<div class="f"><label>Month</label><input data-f="month" value="'+esc(ev.month)+'" placeholder="Mar"></div>'
+  +'<div class="f"><label>Time</label><input data-f="time" value="'+esc(ev.time)+'" placeholder="7:00-8:00 PM"></div>'
+  +'</div>'
+  +'<div class="f"><label>Event Title</label><input data-f="title" value="'+esc(ev.title)+'"></div>'
+  +'<div class="f"><label>Details / Location (one per line)</label><textarea data-f="detail">'+esc(ev.detail)+'</textarea></div>'
+  +'<p class="link-hint">Link is optional - leave URL blank if not needed.</p>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Link Text</label><input data-f="linkText" value="'+esc(ev.linkText||'')+'" placeholder="e.g. Sign Up Here"></div>'
+  +'<div class="f"><label>URL</label><input data-f="link" value="'+esc(ev.link||'')+'" placeholder="https://..."></div>'
+  +'</div>';
+  return d;
+}
+function addEvent(prefix){
+  var container=document.getElementById(prefix==='week'?'week-events':'upcoming-events');
+  var idx=container.querySelectorAll('.card').length;
+  container.appendChild(renderEventCard({day:'',date:'',month:'',title:'',detail:'',time:'',link:'',linkText:''},prefix,idx));
+}
+
+function renderBirthdayCard(b,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type='bday';
+  d.innerHTML='<div class="card-head"><span class="card-num">Birthday '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Name</label><input data-f="name" value="'+esc(b.name)+'"></div>'
+  +'<div class="f"><label>Date (e.g. March 21)</label><input data-f="date" value="'+esc(b.date)+'"></div>'
+  +'</div>';
+  return d;
+}
+function addBirthday(){
+  var c=document.getElementById('birthdays');
+  c.appendChild(renderBirthdayCard({name:'',date:''},c.querySelectorAll('.card').length));
+}
+
+function renderLessonCard(l,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type='lesson';
+  d.innerHTML='<div class="card-head"><span class="card-num">Lesson '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Date</label><input data-f="date" value="'+esc(l.date)+'" placeholder="March 22"></div>'
+  +'<div class="f"><label>Speaker</label><input data-f="speaker" value="'+esc(l.speaker)+'"></div>'
+  +'</div>'
+  +'<div class="f"><label>Lesson Title</label><input data-f="title" value="'+esc(l.title)+'"></div>'
+  +'<p class="link-hint">Link is optional - leave URL blank if not needed.</p>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Link Text</label><input data-f="linkText" value="'+esc(l.linkText||'')+'" placeholder="e.g. Text & Video"></div>'
+  +'<div class="f"><label>URL</label><input data-f="link" value="'+esc(l.link||'')+'" placeholder="https://..."></div>'
+  +'</div>';
+  return d;
+}
+function addLesson(){
+  var c=document.getElementById('lessons');
+  c.appendChild(renderLessonCard({date:'',title:'',speaker:'',link:'',linkText:''},c.querySelectorAll('.card').length));
+}
+
+function renderContactCard(ct,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type='contact';
+  d.innerHTML='<div class="card-head"><span class="card-num">Contact '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Role / Title</label><input data-f="role" value="'+esc(ct.role)+'" placeholder="President"></div>'
+  +'<div class="f"><label>Name</label><input data-f="name" value="'+esc(ct.name)+'"></div>'
+  +'</div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Phone</label><input data-f="phone" value="'+esc(ct.phone)+'"></div>'
+  +'<div class="f"><label>Email</label><input data-f="email" value="'+esc(ct.email)+'"></div>'
+  +'</div>';
+  return d;
+}
+function addContact(){
+  var c=document.getElementById('contacts');
+  c.appendChild(renderContactCard({role:'',name:'',phone:'',email:''},c.querySelectorAll('.card').length));
+}
+
+function renderExtraResourceCard(r,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type='extra-resource';
+  d.innerHTML='<div class="card-head"><span class="card-num">Additional Resource '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Title / Heading</label><input data-f="title" value="'+esc(r.title)+'" placeholder="e.g. Stake Newsletter"></div>'
+  +'<div class="f"><label>Details</label><input data-f="detail" value="'+esc(r.detail)+'" placeholder="Short description or info"></div>'
+  +'</div>'
+  +'<p class="link-hint">Link is optional - leave URL blank if not needed.</p>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Link Text</label><input data-f="linkText" value="'+esc(r.linkText||'')+'" placeholder="e.g. Read More"></div>'
+  +'<div class="f"><label>URL</label><input data-f="link" value="'+esc(r.link||'')+'" placeholder="https://..."></div>'
+  +'</div>';
+  return d;
+}
+function addExtraResource(){
+  var c=document.getElementById('extra-resources');
+  c.appendChild(renderExtraResourceCard({title:'',detail:'',linkText:'',link:''},c.querySelectorAll('.card').length));
+}
+
+function renderMissionaryCard(m,idx){
+  var d=document.createElement('div');
+  d.className='card';d.dataset.type='missionary';
+  d.innerHTML='<div class="card-head"><span class="card-num">Contact '+(idx+1)+'</span><button class="rm-btn" onclick="this.closest(\'.card\').remove()">Remove</button></div>'
+  +'<div class="r2">'
+  +'<div class="f"><label>Name</label><input data-f="name" value="'+esc(m.name||'')+'"></div>'
+  +'<div class="f"><label>Phone</label><input data-f="phone" value="'+esc(m.phone||'')+'"></div>'
+  +'</div>'
+  +'<div class="f"><label>Email</label><input data-f="email" value="'+esc(m.email||'')+'"></div>';
+  return d;
+}
+function addMissionary(){
+  var c=document.getElementById('missionaries');
+  c.appendChild(renderMissionaryCard({name:'',phone:'',email:''},c.querySelectorAll('.card').length));
+}
+
+function initUI(){
+  var we=document.getElementById('week-events');
+  state.weekEvents.forEach(function(e,i){we.appendChild(renderEventCard(e,'week',i));});
+  var bd=document.getElementById('birthdays');
+  state.birthdays.forEach(function(b,i){bd.appendChild(renderBirthdayCard(b,i));});
+  var ue=document.getElementById('upcoming-events');
+  state.upcomingEvents.forEach(function(e,i){ue.appendChild(renderEventCard(e,'upcoming',i));});
+  var ls=document.getElementById('lessons');
+  state.lessons.forEach(function(l,i){ls.appendChild(renderLessonCard(l,i));});
+  var ct=document.getElementById('contacts');
+  state.contacts.forEach(function(c,i){ct.appendChild(renderContactCard(c,i));});
+  var er=document.getElementById('extra-resources');
+  (state.extraResources||[]).forEach(function(r,i){er.appendChild(renderExtraResourceCard(r,i));});
+  var ms=document.getElementById('missionaries');
+  (state.missionaries||[]).forEach(function(m,i){ms.appendChild(renderMissionaryCard(m,i));});
+  if(state.missLink){
+    document.getElementById('miss-link-text').value=state.missLink.linkText||'';
+    document.getElementById('miss-link-url').value=state.missLink.linkUrl||'';
+    document.getElementById('miss-note').value=state.missLink.note||'';
+  }
+  if(state.header){
+    document.getElementById('nl-date').value=state.header.nlDate||'March 22, 2026';
+    document.getElementById('nl-month').value=state.header.nlMonth||'March 2026';
+  }
+  if(state.resources){
+    var R=state.resources;
+    var set=function(id,val){var el=document.getElementById(id);if(el&&val!==undefined)el.value=val;};
+    set('fhc-addr',R.fhcAddr);set('fhc-hours',R.fhcHours);set('fhc-link-text',R.fhcLinkText);set('fhc-link-url',R.fhcLinkUrl);
+    set('hsc-addr',R.hscAddr);set('hsc-hours',R.hscHours);set('hsc-link-text',R.hscLinkText);set('hsc-link-url',R.hscLinkUrl);
+    set('js-name',R.jsName);set('js-phone',R.jsPhone);set('js-email',R.jsEmail);set('js-link-text',R.jsLinkText);set('js-link-url',R.jsLinkUrl);
+    set('sa-date',R.saDate);set('sa-site',R.saSite);set('sa-link-text',R.saLinkText);set('sa-link-url',R.saLinkUrl);
+    set('ysa-info',R.ysaInfo);set('ysa-link-text',R.ysaLinkText);set('ysa-link-url',R.ysaLinkUrl);
+  }
+}
+initUI();
+
+function getR(){
+  return {
+    fhcAddr:document.getElementById('fhc-addr').value,
+    fhcHours:document.getElementById('fhc-hours').value,
+    fhcLinkText:document.getElementById('fhc-link-text').value,
+    fhcLinkUrl:document.getElementById('fhc-link-url').value,
+    hscAddr:document.getElementById('hsc-addr').value,
+    hscHours:document.getElementById('hsc-hours').value,
+    hscLinkText:document.getElementById('hsc-link-text').value,
+    hscLinkUrl:document.getElementById('hsc-link-url').value,
+    jsName:document.getElementById('js-name').value,
+    jsPhone:document.getElementById('js-phone').value,
+    jsEmail:document.getElementById('js-email').value,
+    jsLinkText:document.getElementById('js-link-text').value,
+    jsLinkUrl:document.getElementById('js-link-url').value,
+    saDate:document.getElementById('sa-date').value,
+    saSite:document.getElementById('sa-site').value,
+    saLinkText:document.getElementById('sa-link-text').value,
+    saLinkUrl:document.getElementById('sa-link-url').value,
+    ysaInfo:document.getElementById('ysa-info').value,
+    ysaLinkText:document.getElementById('ysa-link-text').value,
+    ysaLinkUrl:document.getElementById('ysa-link-url').value,
+    m1Name:'',
+    m1Phone:'',
+    m1Email:'',
+    missLinkText:state.missLink?state.missLink.linkText:'',
+    missLinkUrl:state.missLink?state.missLink.linkUrl:'',
+    nlDate:document.getElementById('nl-date').value,
+    nlMonth:document.getElementById('nl-month').value
+  };
+}
+
+function he(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+function buildOptLink(url,txt,color){
+  if(!url)return '';
+  color=color||'#3D5A47';
+  return '<div style="margin-top:7px;"><a href="'+he(url)+'" style="font-size:12px;font-weight:600;color:'+color+';text-decoration:none;border-bottom:1px solid '+color+';">&#8594; '+he(txt||'Learn More')+'</a></div>';
+}
+
+function buildEventCard(ev,upcoming){
+  var accent=upcoming?'#B8860B':'#3D5A47';
+  var bg=upcoming?'#FFF9EE':'#EEF4EF';
+  var tc=upcoming?'rgba(184,134,11,0.12)':'rgba(61,90,71,0.1)';
+  var dlines=(ev.detail||'').split('\n').filter(function(l){return l.trim();});
+  var dhtml=dlines.map(function(l){return '<div style="font-size:13px;color:#666;margin-bottom:2px;">'+he(l)+'</div>';}).join('');
+  var thtml=ev.time?'<div style="display:inline-block;font-size:11px;font-weight:600;background:'+tc+';color:'+accent+';padding:2px 8px;border-radius:4px;margin-top:6px;">'+he(ev.time)+'</div>':'';
+  var lhtml=buildOptLink(ev.link,ev.linkText,accent);
+  return '<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">'
+    +'<tr>'
+    +'<td style="width:8px;background:'+accent+';border-radius:4px 0 0 4px;"></td>'
+    +'<td style="width:78px;background:'+bg+';padding:10px 8px;text-align:center;vertical-align:middle;">'
+    +'<div style="font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:'+accent+';">'+he(ev.day)+'</div>'
+    +'<div style="font-family:Georgia,serif;font-size:22px;font-weight:700;color:#1a1a1a;line-height:1;">'+he(ev.date)+'</div>'
+    +'<div style="font-size:9px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:#888;">'+he(ev.month)+'</div>'
+    +'</td>'
+    +'<td style="background:'+bg+';padding:10px 14px;vertical-align:top;border-radius:0 8px 8px 0;">'
+    +'<div style="font-weight:600;font-size:14px;color:#1a1a1a;margin-bottom:3px;">'+he(ev.title)+'</div>'
+    +dhtml+thtml+lhtml
+    +'</td>'
+    +'</tr>'
+    +'</table>';
+}
+
+function buildBirthdayGrid(bdays){
+  var rows='';
+  for(var i=0;i<bdays.length;i+=3){
+    var grp=bdays.slice(i,i+3);
+    while(grp.length<3)grp.push(null);
+    rows+='<tr>'+grp.map(function(b){
+      return b
+        ?'<td style="width:33%;padding:10px 12px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:8px;text-align:center;"><div style="font-weight:600;font-size:13px;color:#1a1a1a;margin-bottom:3px;">'+he(b.name)+'</div><div style="font-family:Georgia,serif;font-size:14px;font-style:italic;color:#3D5A47;">'+he(b.date)+'</div></td>'
+        :'<td style="width:33%;"></td>';
+    }).join('')+'</tr>';
+  }
+  return '<table style="width:100%;border-collapse:separate;border-spacing:8px;">'+rows+'</table>';
+}
+
+function buildSectionLabel(text){
+  return '<div style="font-size:10px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:#3D5A47;border-bottom:1px solid #E4DDD3;padding-bottom:8px;margin:36px 0 16px;">'+he(text)+'</div>';
+}
+
+function buildLessonCard(l){
+  var lhtml=buildOptLink(l.link,l.linkText,'#3D5A47');
+  return '<div style="display:flex;gap:14px;align-items:flex-start;padding:13px 16px;background:#FAF7F2;border-radius:9px;border:1px solid #E4DDD3;margin-bottom:9px;">'
+    +'<div style="width:10px;height:10px;border-radius:50%;background:#3D5A47;flex-shrink:0;margin-top:4px;"></div>'
+    +'<div>'
+    +'<div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:3px;">'+he(l.date)+'</div>'
+    +'<div style="font-size:14px;font-weight:600;color:#1a1a1a;">'+he(l.title)+'</div>'
+    +'<div style="font-size:13px;color:#666;">'+he(l.speaker)+'</div>'
+    +lhtml
+    +'</div>'
+    +'</div>';
+}
+
+function buildContactPair(pair){
+  return '<tr>'+pair.map(function(c){
+    return '<td style="width:50%;padding:10px 13px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:8px;vertical-align:top;">'
+      +'<div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#6B8F71;margin-bottom:3px;">'+he(c.role)+'</div>'
+      +'<div style="font-weight:600;font-size:13.5px;color:#1a1a1a;margin-bottom:4px;">'+he(c.name)+'</div>'
+      +(c.phone?'<div style="font-size:12px;color:#666;">'+he(c.phone)+'</div>':'')
+      +(c.email?'<div style="font-size:12px;"><a href="mailto:'+he(c.email)+'" style="color:#3D5A47;text-decoration:none;">'+he(c.email)+'</a></div>':'')
+      +'</td>';
+  }).join('<td style="width:8px;"></td>')+'</tr>';
+}
+
+function generateNewsletter(){
+  collectState();
+  var R=getR();
+  var eventsHTML=state.weekEvents.map(function(e){return buildEventCard(e,false);}).join('');
+  var upcomingHTML=state.upcomingEvents.map(function(e){return buildEventCard(e,true);}).join('');
+  var lessonsHTML=state.lessons.map(function(l){return buildLessonCard(l);}).join('');
+  var contactPairs=[];
+  for(var i=0;i<state.contacts.length;i+=2){
+    var pair=[state.contacts[i]];
+    if(state.contacts[i+1])pair.push(state.contacts[i+1]);
+    else pair.push({role:'',name:'',phone:'',email:''});
+    contactPairs.push(pair);
+  }
+  var contactsHTML='<table style="width:100%;border-collapse:separate;border-spacing:8px;">'+contactPairs.map(buildContactPair).join('')+'</table>';
+
+  var missSL=buildOptLink(state.missLink&&state.missLink.linkUrl?state.missLink.linkUrl:'',state.missLink&&state.missLink.linkText?state.missLink.linkText:'','#3D5A47');
+  var fhcL=buildOptLink(R.fhcLinkUrl,R.fhcLinkText,'#3D5A47');
+  var hscL=buildOptLink(R.hscLinkUrl,R.hscLinkText,'#3D5A47');
+  var jsL=buildOptLink(R.jsLinkUrl,R.jsLinkText,'#3D5A47');
+  var saL=buildOptLink(R.saLinkUrl,R.saLinkText,'#3D5A47');
+  var ysaL=buildOptLink(R.ysaLinkUrl,R.ysaLinkText,'#3D5A47');
+
+  var parts=[];
+  parts.push('<!DOCTYPE html>');
+  parts.push('<html lang="en"><head>');
+  parts.push('<meta charset="UTF-8">');
+  parts.push('<meta name="viewport" content="width=device-width,initial-scale=1.0">');
+  parts.push('<title>Plano 4th Ward Relief Society Bulletin - '+he(R.nlDate)+'</title>');
+  parts.push('<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">');
+  parts.push('<style>*{margin:0;padding:0;box-sizing:border-box;}body{background:#FAF7F2;font-family:\'DM Sans\',sans-serif;color:#1A1A1A;line-height:1.6;}.page{max-width:720px;margin:0 auto;background:#fff;box-shadow:0 4px 40px rgba(0,0,0,0.08);}</style>');
+  parts.push('</head><body><div class="page">');
+
+  parts.push('<div style="background:#3D5A47;padding:40px 48px 32px;text-align:center;">');
+  parts.push('<div style="font-size:10px;font-weight:600;letter-spacing:3px;text-transform:uppercase;color:#9DC4A4;margin-bottom:10px;">The Church of Jesus Christ of Latter-day Saints</div>');
+  parts.push('<h1 style="font-family:\'Cormorant Garamond\',Georgia,serif;font-size:38px;font-weight:600;color:#fff;line-height:1.15;margin-bottom:6px;">Plano 4th Ward</h1>');
+  parts.push('<h2 style="font-family:\'Cormorant Garamond\',Georgia,serif;font-size:20px;font-weight:400;font-style:italic;color:#C5D9C8;margin-bottom:20px;">Relief Society Bulletin</h2>');
+  parts.push('<div style="display:inline-block;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);color:#E8F0E9;font-size:12px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;padding:6px 18px;border-radius:20px;">'+he(R.nlDate)+'</div>');
+  parts.push('</div>');
+  parts.push('<div style="padding:0 48px 48px;">');
+
+  parts.push(buildSectionLabel("This Week's Events")+eventsHTML);
+  parts.push(buildSectionLabel("Upcoming Birthdays")+buildBirthdayGrid(state.birthdays));
+  parts.push(buildSectionLabel("Upcoming Events")+upcomingHTML);
+  parts.push(buildSectionLabel("Relief Society Lessons")+lessonsHTML);
+
+  parts.push(buildSectionLabel("Feed the Missionaries"));
+  parts.push('<div style="background:#EEF4EF;border-radius:10px;border:1px solid #C9DFD0;padding:20px 22px;">');
+  parts.push('<div style="font-size:15px;font-weight:600;color:#1a1a1a;margin-bottom:8px;">Sign Up to Host the Missionaries for Dinner</div>');
+  var missNote=state.missLink&&state.missLink.note?state.missLink.note.trim():'';
+  if(missNote){parts.push('<div style="font-size:13px;color:#3D5A47;font-weight:500;line-height:1.6;margin-bottom:10px;padding:8px 12px;background:rgba(61,90,71,0.08);border-left:3px solid #3D5A47;border-radius:0 6px 6px 0;">'+he(missNote)+'</div>');}
+  parts.push('<div style="font-size:13px;color:#666;line-height:1.65;margin-bottom:14px;">Each family has been asked to sign-up once every 4-6 weeks to feed our Missionaries. Use the sign-up sheet that is passed around each Sunday during second hour classes. Contact Missy Kelso if you missed the sign-up sheet or are unable to attend in person.</div>');
+  var missContactsHTML='';
+  (state.missionaries||[]).forEach(function(m){
+    if(m.name||m.phone||m.email){
+      missContactsHTML+='<div style="background:#fff;border:1px solid #E4DDD3;border-radius:8px;padding:10px 14px;flex:1;min-width:200px;">'
+        +'<div style="font-weight:600;font-size:13px;color:#1a1a1a;margin-bottom:2px;">'+he(m.name||'')+'</div>'
+        +'<div style="font-size:12px;color:#666;">'+he(m.phone||'')+'</div>'
+        +(m.email?'<div style="font-size:12px;"><a href="mailto:'+he(m.email)+'" style="color:#3D5A47;text-decoration:none;">'+he(m.email)+'</a></div>':'')
+        +'</div>';
+    }
+  });
+  parts.push('<div style="display:flex;gap:12px;flex-wrap:wrap;">');
+  parts.push(missContactsHTML);
+  parts.push('</div>'+missSL+'</div>');
+
+  parts.push(buildSectionLabel("Resources & Information"));
+  parts.push('<table style="width:100%;border-collapse:separate;border-spacing:8px;">');
+  parts.push('<tr>');
+  parts.push('<td style="width:50%;padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">Family History Center</div><div style="font-size:12.5px;color:#666;line-height:1.7;">'+he(R.fhcAddr)+'<br>'+he(R.fhcHours)+'</div>'+fhcL+'</td>');
+  parts.push('<td style="width:50%;padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">Home Storage Center</div><div style="font-size:12.5px;color:#666;line-height:1.7;">'+he(R.hscAddr)+'<br>'+he(R.hscHours)+'</div>'+hscL+'</td>');
+  parts.push('</tr><tr>');
+  parts.push('<td style="padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">JustServe</div><div style="font-size:12.5px;color:#666;line-height:1.7;">Find service projects in the Plano area.<br><strong style="color:#1a1a1a;">'+he(R.jsName)+'</strong> - '+he(R.jsPhone)+'<br>'+he(R.jsEmail)+'</div>'+jsL+'</td>');
+  parts.push('<td style="padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">Single Adults 36+</div><div style="font-size:12.5px;color:#666;line-height:1.7;"><a href="https://'+he(R.saSite)+'" style="color:#3D5A47;font-weight:500;">'+he(R.saSite)+'</a><br>Save the Date: '+he(R.saDate)+'</div>'+saL+'</td>');
+  parts.push('</tr><tr>');
+  parts.push('<td colspan="2" style="padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:5px;">Young Single Adults (18-35)</div><div style="font-size:12.5px;color:#666;">'+he(R.ysaInfo)+'</div>'+ysaL+'</td>');
+  parts.push('</tr><tr>');
+  parts.push('<td colspan="2" style="padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;"><div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:5px;">Employment Resources</div><div style="font-size:12.5px;color:#666;"><a href="https://www.latterdaysaintjobs.org/ers/ct/?lang=eng" style="color:#3D5A47;font-weight:500;">LDS Jobs</a> &nbsp;&middot;&nbsp; <a href="https://www.churchofjesuschrist.org/life/help-for-job-seekers?lang=eng" style="color:#3D5A47;font-weight:500;">Church Employment Help</a> &nbsp;&middot;&nbsp; <a href="https://www.twc.texas.gov/" style="color:#3D5A47;font-weight:500;">Texas Workforce Commission</a> &nbsp;&middot;&nbsp; <a href="https://www.dfwjobs.com/" style="color:#3D5A47;font-weight:500;">DFW Jobs</a></div></td>');
+  parts.push('</tr></table>');
+
+  if(state.extraResources && state.extraResources.length>0){
+    var extraRows='';
+    for(var i=0;i<state.extraResources.length;i+=2){
+      var r1=state.extraResources[i];
+      var r2=state.extraResources[i+1]||null;
+      var buildCell=function(r){
+        var lnk=buildOptLink(r.link,r.linkText,'#3D5A47');
+        return '<td style="width:50%;padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;">'
+          +'<div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">'+he(r.title)+'</div>'
+          +'<div style="font-size:12.5px;color:#666;line-height:1.7;">'+he(r.detail)+'</div>'
+          +lnk+'</td>';
+      };
+      if(r2){
+        extraRows+='<tr>'+buildCell(r1)+'<td style="width:8px;"></td>'+buildCell(r2)+'</tr>';
+      } else {
+        extraRows+='<tr><td colspan="2" style="padding:13px 15px;background:#FAF7F2;border:1px solid #E4DDD3;border-radius:9px;vertical-align:top;">'
+          +'<div style="font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#3D5A47;margin-bottom:7px;">'+he(r1.title)+'</div>'
+          +'<div style="font-size:12.5px;color:#666;line-height:1.7;">'+he(r1.detail)+'</div>'
+          +buildOptLink(r1.link,r1.linkText,'#3D5A47')+'</td></tr>';
+      }
+    }
+    parts.push('<table style="width:100%;border-collapse:separate;border-spacing:8px;">'+extraRows+'</table>');
+  }
+
+  parts.push(buildSectionLabel("Leadership Contacts")+contactsHTML);
+  parts.push('</div>');
+  parts.push('<div style="background:#3D5A47;text-align:center;padding:28px 48px;color:#C5D9C8;font-size:12px;line-height:1.8;"><strong style="color:white;">Plano 4th Ward Relief Society</strong><br>Charity Never Faileth &nbsp;&middot;&nbsp; '+he(R.nlMonth)+'</div>');
+  parts.push('</div></body></html>');
+
+  var html=parts.join('\n');
+  var blob=new Blob([html],{type:'text/html'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;
+  a.download='ReliefSocietyBulletin_'+R.nlDate.replace(/\s/g,'_').replace(/,/g,'')+'.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Bulletin downloaded!');
+}
+</script>
+</body>
+</html>
