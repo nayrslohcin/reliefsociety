@@ -34,8 +34,28 @@
  *         signed up for which day
  *       - your private responses spreadsheet (includes phone numbers)
  *
- * To run it again for a new month, just update the dates and
- * run createSignupForm again — it makes a fresh form each time.
+ * To open up a new month, update START_DATE/END_DATE and run
+ * extendSignupForm() instead — it adds the new dates to the SAME
+ * form and schedule sheet, so the links you already shared keep
+ * working. createSignupForm() refuses to run again as long as a form
+ * already exists in the "Missionary Meals" folder (it just logs a
+ * message and stops), so it's safe to click Run on the wrong function
+ * by accident — nothing gets overwritten. To start completely over,
+ * move or delete the files in that folder yourself first.
+ *
+ * For signups and cancellations that don't happen through the form
+ * itself (phone calls, in-person), open the private responses
+ * spreadsheet:
+ *  - "Quick Add" tab: type in a Name + Date (yyyy-mm-dd) to claim a
+ *    date — updates the calendar and dropdown, and adds a row to the
+ *    "Form Responses" tab too, same as a real form submission would
+ *  - "Quick Cancel" tab: type in a Date (yyyy-mm-dd) to reopen it for
+ *    someone else, same as cancelSignup() below
+ * Either way, a Status column fills in automatically once it's
+ * processed ("Done"/"Reopened", or an error message).
+ *
+ * (The script-editor equivalent of "Quick Cancel": set CANCEL_DATE
+ * below to a date and run cancelSignup().)
  *
  * ALL FILES are placed in a Drive folder named "Missionary Meals"
  * (created automatically, reused on later runs). Do NOT share that
@@ -77,8 +97,8 @@
  */
 
 // ======== EDIT THESE ========
-const START_DATE = '2026-09-01';   // yyyy-mm-dd
-const END_DATE   = '2026-09-30';   // yyyy-mm-dd
+const START_DATE = '2026-08-01';   // yyyy-mm-dd
+const END_DATE   = '2026-08-31';   // yyyy-mm-dd
 const WARD_NAME = 'Plano 4th Ward';
 const FORM_TITLE = WARD_NAME + ' Missionary Meal Sign-Up';
 const FOLDER_NAME = 'Missionary Meals';
@@ -92,13 +112,33 @@ const DESCRIPTION =
 const MEAL_TIME = '17:00';        // 24-hour HH:mm, meal start time
 const MEAL_DURATION_MINUTES = 60;
 const MEAL_LOCATION = '';         // e.g. missionary apartment address; leave '' to omit
+
+// Only used by cancelSignup() — set this to a date (yyyy-mm-dd) that
+// someone had to cancel, then run cancelSignup(), so it reopens on
+// the form for someone else to grab.
+const CANCEL_DATE = '';           // yyyy-mm-dd, leave '' when not in use
 // ============================
 
 const Q_NAME = 'Your name';
-const Q_PHONE = 'Phone number (in case plans change)';
+const Q_PHONE = 'Phone number';
 const Q_EMAIL = 'Email address (for your confirmation + calendar invite)';
 
 function createSignupForm() {
+  // Refuse to create a second form if one already exists in the
+  // "Missionary Meals" folder — prevents accidentally overwriting an
+  // existing form/schedule and orphaning their properties. To start
+  // completely fresh, move or delete the existing files in that
+  // folder yourself first, then run this again.
+  const folder = getOrCreateFolder(FOLDER_NAME);
+  const existingForm = findExistingFormFile(folder);
+  if (existingForm) {
+    Logger.log('A sign-up form already exists in the "' + FOLDER_NAME + '" folder — not creating a new one.');
+    Logger.log('Existing form: ' + existingForm.getName() + '\n' + existingForm.getUrl());
+    Logger.log('To open up a new month on it, update START_DATE/END_DATE and run extendSignupForm() instead.');
+    Logger.log('To start over, move or delete the files in the "' + FOLDER_NAME + '" folder, then run createSignupForm() again.');
+    return;
+  }
+
   const form = FormApp.create(FORM_TITLE);
   form.setDescription(DESCRIPTION);
   form.setLimitOneResponsePerUser(false); // set true to limit 1 signup per Google account
@@ -117,6 +157,8 @@ function createSignupForm() {
   // Private spreadsheet for full responses (includes phone numbers)
   const responsesSs = SpreadsheetApp.create(FORM_TITLE + ' — Responses (private)');
   form.setDestination(FormApp.DestinationType.SPREADSHEET, responsesSs.getId());
+  setupQuickAddSheet(responsesSs);
+  setupQuickCancelSheet(responsesSs);
 
   // Public read-only schedule spreadsheet, laid out as a real calendar
   // (month/year header, weekday columns, one row per week)
@@ -125,6 +167,13 @@ function createSignupForm() {
   const endDate = new Date(END_DATE + 'T00:00:00');
   const blocks = buildCalendarBlocks(startDate, endDate);
   const dateMap = renderSchedule(scheduleSs, blocks);
+
+  // Grey out any square that's already in the past (e.g. START_DATE
+  // was set to earlier this month) — those never went in the dropdown
+  // either, since buildDateList() only includes today onward
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  greyOutPastDates(scheduleSs.getSheetByName('Schedule'), dateMap, today);
 
   // Remember date -> cell mapping so onSignup can find the right box
   PropertiesService.getScriptProperties()
@@ -137,13 +186,21 @@ function createSignupForm() {
   // Move everything into the "Missionary Meals" folder.
   // NOTE: the folder itself stays private — only the schedule file
   // above is shared.
-  const folder = getOrCreateFolder(FOLDER_NAME);
   [form.getId(), responsesSs.getId(), scheduleSs.getId()].forEach(id =>
     DriveApp.getFileById(id).moveTo(folder));
 
-  // Remember the schedule sheet so the trigger can update it
+  // Remember the form + schedule sheet so extendSignupForm() (and the
+  // trigger) can find them again later, plus which calendar months
+  // are already on the schedule so extendSignupForm() can't add the
+  // same month twice
   PropertiesService.getScriptProperties()
     .setProperty('SCHEDULE_ID', scheduleSs.getId());
+  PropertiesService.getScriptProperties()
+    .setProperty('FORM_ID', form.getId());
+  PropertiesService.getScriptProperties()
+    .setProperty('RESPONSES_ID', responsesSs.getId());
+  PropertiesService.getScriptProperties()
+    .setProperty('ADDED_MONTHS', JSON.stringify(blocks.map(b => b.key)));
 
   // Remove any triggers left over from previous runs, then create ours
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
@@ -154,6 +211,14 @@ function createSignupForm() {
     .onFormSubmit()
     .create();
 
+  // Trigger: watches the "Quick Add" / "Quick Cancel" tabs on the
+  // private responses spreadsheet for phone/in-person signups and
+  // cancellations typed in directly, instead of through the form
+  ScriptApp.newTrigger('onResponsesEdit')
+    .forSpreadsheet(responsesSs)
+    .onEdit()
+    .create();
+
   // Optional: add the schedule link to the form description
   form.setDescription(DESCRIPTION +
     '\n\n📅 You can view the current meal calendar by month here:\n' + scheduleSs.getUrl());
@@ -161,7 +226,239 @@ function createSignupForm() {
   Logger.log('SIGN-UP link (share with congregation):\n' + form.getPublishedUrl());
   Logger.log('SCHEDULE link (read-only, share with congregation):\n' + scheduleSs.getUrl());
   Logger.log('Private responses spreadsheet (for you only):\n' + responsesSs.getUrl());
+  Logger.log('To sign someone up by phone/in person, use the "Quick Add" tab in that spreadsheet.');
+  Logger.log('To reopen a date someone had to cancel, use the "Quick Cancel" tab in that same spreadsheet.');
   Logger.log('Form EDIT link (for you):\n' + form.getEditUrl());
+}
+
+/**
+ * Extends the EXISTING form + schedule sheet created by
+ * createSignupForm() with a new date range, instead of making a
+ * fresh form. The sign-up link and schedule link stay exactly the
+ * same — just update START_DATE/END_DATE above and run this.
+ *
+ * - Adds the new range's dates to the form's dropdown, keeping any
+ *   still-open dates from before (minus ones now in the past)
+ * - Re-opens the form if a previous batch of dates had filled it up
+ * - Appends a new calendar block to the schedule sheet below the
+ *   existing one(s) — past months are left in place as a record
+ * - Refuses to add a calendar month that's already been added before
+ *   (tracked in the ADDED_MONTHS script property), so re-running it
+ *   with the same/overlapping START_DATE/END_DATE is a harmless no-op
+ *   instead of creating a duplicate block or re-opening claimed dates
+ *
+ * Run createSignupForm() once first; after that, just run this each
+ * time you want to open up a new month.
+ */
+function extendSignupForm() {
+  const props = PropertiesService.getScriptProperties();
+  const formId = props.getProperty('FORM_ID');
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  if (!formId || !scheduleId) {
+    throw new Error('No existing form found — run createSignupForm() first.');
+  }
+
+  const startDate = new Date(START_DATE + 'T00:00:00');
+  const endDate = new Date(END_DATE + 'T00:00:00');
+  const allBlocks = buildCalendarBlocks(startDate, endDate);
+
+  // Drop any calendar month already added on a previous run, so this
+  // function is safe to re-run with the same or overlapping dates
+  const addedMonths = JSON.parse(props.getProperty('ADDED_MONTHS') || '[]');
+  const skippedBlocks = allBlocks.filter(b => addedMonths.indexOf(b.key) !== -1);
+  const newBlocks = allBlocks.filter(b => addedMonths.indexOf(b.key) === -1);
+
+  if (skippedBlocks.length > 0) {
+    Logger.log('Already added, skipping: ' + skippedBlocks.map(b => b.label).join(', '));
+  }
+  if (newBlocks.length === 0) {
+    Logger.log('Nothing to do — every month in ' + START_DATE + ' to ' + END_DATE +
+      ' has already been added. Change START_DATE/END_DATE to a new range.');
+    return;
+  }
+
+  const form = FormApp.openById(formId);
+  const scheduleSs = SpreadsheetApp.openById(scheduleId);
+
+  // Re-open in case the last batch of dates filled up and the form
+  // auto-closed itself
+  form.setAcceptingResponses(true);
+
+  // Keep still-open, still-future choices from before; drop the
+  // "all filled" placeholder and anything now in the past
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const keptChoices = listItem.getChoices()
+    .map(c => c.getValue())
+    .filter(v => v !== '(All dates are filled)')
+    .filter(v => {
+      const d = parseDateLabel(v);
+      return d && d >= today;
+    });
+
+  // New dropdown choices come only from the NOT-already-added months,
+  // and only from today onward (in case START_DATE lands mid-month),
+  // so a duplicate/overlapping run can't reopen an already-claimed
+  // or already-past date
+  const newDates = newBlocks
+    .reduce((cells, block) => cells.concat(block.weeks.flat()), [])
+    .filter(cell => cell && cell.status === 'available' &&
+      new Date(cell.isoDate + 'T00:00:00') >= today)
+    .map(cell => cell.dateLabel);
+  const merged = keptChoices.concat(newDates.filter(d => keptChoices.indexOf(d) === -1));
+  listItem.setChoiceValues(merged);
+
+  // Append the new calendar block(s) below whatever is already drawn
+  const sheet = scheduleSs.getSheetByName('Schedule') || scheduleSs.getActiveSheet();
+  const startRow = sheet.getLastRow() > 0 ? sheet.getLastRow() + 2 : 1;
+  const newMap = renderSchedule(scheduleSs, newBlocks, startRow);
+
+  // Merge the new date -> cell mapping into the existing one (keys
+  // are full dates, so old and new months never collide)
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  const dateMap = mapJson ? JSON.parse(mapJson) : {};
+  Object.assign(dateMap, newMap);
+  props.setProperty('SCHEDULE_MAP', JSON.stringify(dateMap));
+
+  // Grey out any square that's now in the past with nobody signed up
+  // for it, across the WHOLE schedule (not just the new block) — this
+  // is the natural moment to sweep, since it's when we're already
+  // touching the sheet and re-checking "today"
+  greyOutPastDates(sheet, dateMap, today);
+
+  // Remember these months as added so a future run can't duplicate them
+  props.setProperty('ADDED_MONTHS',
+    JSON.stringify(addedMonths.concat(newBlocks.map(b => b.key))));
+
+  Logger.log('Added: ' + newBlocks.map(b => b.label).join(', '));
+  Logger.log('SIGN-UP link (unchanged):\n' + form.getPublishedUrl());
+  Logger.log('SCHEDULE link (unchanged):\n' + scheduleSs.getUrl());
+}
+
+/**
+ * Greys out any square in dateMap whose date has passed and that
+ * nobody signed up for (still showing the white "— available —"
+ * styling from renderSchedule). Squares someone already claimed
+ * (green background, from onSignup) are left untouched.
+ */
+function greyOutPastDates(sheet, dateMap, today) {
+  Object.keys(dateMap).forEach(label => {
+    const ref = dateMap[label];
+    if (new Date(ref.iso + 'T00:00:00') >= today) return;
+
+    const cell = sheet.getRange(ref.row, ref.col);
+    if (cell.getBackground() === '#93c47d') return; // already claimed
+
+    const dayNumber = cell.getValue().toString().split('\n')[0];
+    cell.setValue(dayNumber + '\n(past)')
+      .setBackground('#efefef')
+      .setFontColor('#999999');
+  });
+}
+
+/**
+ * Reopens a single date that someone had to back out of, by editing
+ * the script: set CANCEL_DATE above to the date (yyyy-mm-dd) and run
+ * this. (For most cancellations, typing the date into the "Quick
+ * Cancel" tab on the private responses spreadsheet is easier — this
+ * is the script-editor equivalent of that.)
+ */
+function cancelSignup() {
+  if (!CANCEL_DATE) {
+    throw new Error('Set CANCEL_DATE above to the date you want to reopen (yyyy-mm-dd), then run cancelSignup() again.');
+  }
+
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (!formId) {
+    throw new Error('No existing form found — run createSignupForm() first.');
+  }
+
+  const label = findDateLabel(CANCEL_DATE);
+  if (!label) {
+    throw new Error('Could not find ' + CANCEL_DATE +
+      ' on the schedule. Check CANCEL_DATE is in yyyy-mm-dd format and falls in a month that has already been added.');
+  }
+
+  const form = FormApp.openById(formId);
+  const result = releaseDate(form, label);
+  Logger.log(result || (label + ' is available again — back on the form for someone else to sign up.'));
+}
+
+/**
+ * Releases dateLabel back to "available": removes their row from the
+ * "Form Responses" roster, clears the schedule square, and — if the
+ * date hasn't already passed — puts it back on the form's dropdown
+ * (reopening the form if it had auto-closed). Shared by cancelSignup()
+ * (script-driven) and handleQuickCancel() (the "Quick Cancel"
+ * spreadsheet tab). Returns null on a normal reopen, or a message
+ * describing what happened otherwise — an error, or a note that a
+ * past date was only cleared, not reopened.
+ */
+function releaseDate(form, dateLabel) {
+  const props = PropertiesService.getScriptProperties();
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  if (!scheduleId || !mapJson) {
+    return 'SCHEDULE_ID/SCHEDULE_MAP not set — re-run createSignupForm() first.';
+  }
+  const dateMap = JSON.parse(mapJson);
+  const cellRef = dateMap[dateLabel];
+  if (!cellRef) {
+    return 'Could not find "' + dateLabel + '" in the schedule calendar.';
+  }
+
+  // Remove their row from the "Form Responses" roster, since they're
+  // no longer signed up for this date
+  const responsesId = props.getProperty('RESPONSES_ID');
+  if (responsesId) removeResponseRows(SpreadsheetApp.openById(responsesId), dateLabel);
+
+  const sheet = SpreadsheetApp.openById(scheduleId).getSheetByName('Schedule');
+  const cell = sheet.getRange(cellRef.row, cellRef.col);
+  const dayNumber = cell.getValue().toString().split('\n')[0];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const isPast = new Date(cellRef.iso + 'T00:00:00') < today;
+
+  if (isPast) {
+    cell.setValue(dayNumber + '\n(past)')
+      .setBackground('#efefef')
+      .setFontColor('#999999');
+    return 'Cleared, but not reopened — ' + dateLabel + ' has already passed.';
+  }
+
+  cell.setValue(dayNumber + '\n— available —')
+    .setBackground('#ffffff')
+    .setFontColor('#000000');
+
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const choices = listItem.getChoices()
+    .map(c => c.getValue())
+    .filter(v => v !== '(All dates are filled)');
+  if (choices.indexOf(dateLabel) === -1) choices.push(dateLabel);
+
+  // Keep the dropdown in chronological order
+  choices.sort((a, b) => {
+    const ia = dateMap[a] ? dateMap[a].iso : '';
+    const ib = dateMap[b] ? dateMap[b].iso : '';
+    return ia < ib ? -1 : ia > ib ? 1 : 0;
+  });
+  listItem.setChoiceValues(choices);
+
+  if (!form.isAcceptingResponses()) {
+    form.setAcceptingResponses(true);
+  }
+
+  return null;
+}
+
+/** Parses a dateLabel in 'EEEE, MMMM d, yyyy' format (as produced by buildDateList) back into a Date. */
+function parseDateLabel(label) {
+  const parts = label.split(', ');
+  if (parts.length !== 3) return null;
+  const d = new Date(parts[1] + ' ' + parts[2]);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 /** Find the folder if this script already made it, otherwise create it. */
@@ -170,14 +467,26 @@ function getOrCreateFolder(name) {
   return existing.hasNext() ? existing.next() : DriveApp.createFolder(name);
 }
 
-/** Every date from START_DATE to END_DATE, skipping Mondays. */
+/** Returns the first non-trashed Google Form file directly in the given folder, or null if there isn't one. */
+function findExistingFormFile(folder) {
+  const files = folder.getFilesByType(MimeType.GOOGLE_FORMS);
+  while (files.hasNext()) {
+    const file = files.next();
+    if (!file.isTrashed()) return file;
+  }
+  return null;
+}
+
+/** Every date from START_DATE to END_DATE, skipping Mondays and anything before today. */
 function buildDateList() {
   const tz = Session.getScriptTimeZone();
   const start = new Date(START_DATE + 'T00:00:00');
   const end = new Date(END_DATE + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   const dates = [];
   for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() !== 1) { // 1 = Monday
+    if (d.getDay() !== 1 && d >= today) { // 1 = Monday
       dates.push(Utilities.formatDate(d, tz, 'EEEE, MMMM d, yyyy'));
     }
   }
@@ -234,6 +543,7 @@ function buildCalendarBlocks(startDate, endDate) {
     }
 
     blocks.push({
+      key: Utilities.formatDate(cursor, tz, 'yyyy-MM'),
       label: Utilities.formatDate(cursor, tz, 'MMMM yyyy'),
       weeks: weeks
     });
@@ -249,13 +559,17 @@ function buildCalendarBlocks(startDate, endDate) {
  * per week with one column per day. Returns a map of
  * dateLabel -> {row, col} for every "available" day, so onSignup()
  * can write a name straight into the right box.
+ *
+ * startRow (default 1) lets extendSignupForm() append new month
+ * block(s) below whatever is already on the sheet instead of
+ * overwriting it.
  */
-function renderSchedule(scheduleSs, blocks) {
+function renderSchedule(scheduleSs, blocks, startRow) {
   const sheet = scheduleSs.getActiveSheet();
-  sheet.setName('Schedule');
+  if (sheet.getName() !== 'Schedule') sheet.setName('Schedule');
   const HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dateMap = {};
-  let row = 1;
+  let row = startRow || 1;
 
   blocks.forEach(block => {
     // Month + year title, merged across all 7 day columns
@@ -323,7 +637,7 @@ function renderSchedule(scheduleSs, blocks) {
   return dateMap;
 }
 
-/** Runs automatically on each submission. */
+/** Runs automatically on each form submission. */
 function onSignup(e) {
   const form = e.source;
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
@@ -335,11 +649,156 @@ function onSignup(e) {
   const name = findResponse(responses, Q_NAME);
   const email = findResponse(responses, Q_EMAIL);
 
-  // 1) Remove the taken date from the form
-  const remaining = listItem.getChoices()
-    .map(c => c.getValue())
-    .filter(v => v !== chosenDate);
+  const error = claimDate(form, chosenDate, name, email);
+  if (error) console.error(error);
+}
 
+/**
+ * Runs on every edit to the private responses spreadsheet. Dispatches
+ * to the handler for whichever "Quick ..." tab was touched; ignores
+ * edits everywhere else (e.g. the form's own "Form Responses" tab).
+ */
+function onResponsesEdit(e) {
+  const sheetName = e.range.getSheet().getName();
+  if (sheetName === 'Quick Add') handleQuickAdd(e);
+  else if (sheetName === 'Quick Cancel') handleQuickCancel(e);
+}
+
+/**
+ * Watches the "Quick Add" tab for phone/in-person signups typed in
+ * directly (Name + Date filled in on a row not already marked
+ * "Done"), and processes each one exactly like a real form submission.
+ */
+function handleQuickAdd(e) {
+  const sheet = e.range.getSheet();
+  const firstRow = Math.max(e.range.getRow(), 2); // skip the header row
+  const lastRow = e.range.getLastRow();
+  if (lastRow < 2) return;
+
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (!formId) return; // createSignupForm() hasn't run yet
+
+  const form = FormApp.openById(formId);
+  const responsesSs = sheet.getParent();
+
+  for (let row = firstRow; row <= lastRow; row++) {
+    const [name, phone, email, dateVal, status] = sheet.getRange(row, 1, 1, 5).getValues()[0];
+    if (status === 'Done' || !name || !dateVal) continue; // incomplete or already handled
+
+    const label = findDateLabel(String(dateVal).trim());
+    const statusCell = sheet.getRange(row, 5);
+    if (!label) {
+      statusCell.setValue('Could not match "' + dateVal + '" — use yyyy-mm-dd and make sure that month has been added.');
+      continue;
+    }
+
+    const error = claimDate(form, label, name, email);
+    if (!error) appendResponseRow(responsesSs, name, phone, email, label);
+    statusCell.setValue(error || 'Done');
+  }
+}
+
+/**
+ * Adds a row to the form's own "Form Responses" tab for a signup that
+ * didn't come through the form itself (Quick Add), so that tab stays
+ * a complete roster of everyone signed up, not just real submissions.
+ * Column order matches the form's questions: Timestamp, Name, Phone,
+ * Email, Date.
+ */
+function appendResponseRow(responsesSs, name, phone, email, dateLabel) {
+  const sheet = getFormResponsesSheet(responsesSs);
+  if (!sheet) return;
+  sheet.appendRow([new Date(), name, phone, email, dateLabel]);
+}
+
+/**
+ * Deletes every row on the "Form Responses" tab whose Date column
+ * (5th column: Timestamp, Name, Phone, Email, Date) matches dateLabel,
+ * since releaseDate() calls this whenever a signup for that date is
+ * cancelled — that roster should only ever show who's currently
+ * signed up, not people who backed out.
+ */
+function removeResponseRows(responsesSs, dateLabel) {
+  const sheet = getFormResponsesSheet(responsesSs);
+  if (!sheet) return;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const dateCol = 5;
+  const values = sheet.getRange(2, dateCol, lastRow - 1, 1).getValues();
+  for (let i = values.length - 1; i >= 0; i--) { // bottom-up so row numbers don't shift mid-loop
+    if (values[i][0] === dateLabel) sheet.deleteRow(i + 2);
+  }
+}
+
+/** Finds the form's own "Form Responses" tab on the private spreadsheet (the one sheet that isn't "Quick Add"/"Quick Cancel"). */
+function getFormResponsesSheet(responsesSs) {
+  return responsesSs.getSheets()
+    .find(s => s.getName() !== 'Quick Add' && s.getName() !== 'Quick Cancel');
+}
+
+/**
+ * Watches the "Quick Cancel" tab for dates typed in directly (a Date
+ * filled in on a row not already marked "Reopened"), and releases
+ * each one back to available exactly like cancelSignup() does.
+ */
+function handleQuickCancel(e) {
+  const sheet = e.range.getSheet();
+  const firstRow = Math.max(e.range.getRow(), 2); // skip the header row
+  const lastRow = e.range.getLastRow();
+  if (lastRow < 2) return;
+
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (!formId) return; // createSignupForm() hasn't run yet
+
+  const form = FormApp.openById(formId);
+
+  for (let row = firstRow; row <= lastRow; row++) {
+    const [dateVal, status] = sheet.getRange(row, 1, 1, 2).getValues()[0];
+    if (status === 'Reopened' || !dateVal) continue; // empty or already handled
+
+    const label = findDateLabel(String(dateVal).trim());
+    const statusCell = sheet.getRange(row, 2);
+    if (!label) {
+      statusCell.setValue('Could not match "' + dateVal + '" — use yyyy-mm-dd and make sure that month has been added.');
+      continue;
+    }
+
+    const result = releaseDate(form, label);
+    statusCell.setValue(result || 'Reopened');
+  }
+}
+
+/**
+ * Claims dateLabel on the given form for name/email: removes it from
+ * the dropdown (closing the form if that was the last one), marks
+ * the schedule square, and emails a confirmation if an email was
+ * given. Shared by onSignup() (real form submissions) and
+ * handleQuickAdd() (phone/in-person signups typed into "Quick Add").
+ * Returns an error message string on failure, or null on success —
+ * callers decide how to surface that (log it, write it to a cell...).
+ */
+function claimDate(form, dateLabel, name, email) {
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const choices = listItem.getChoices().map(c => c.getValue());
+  if (choices.indexOf(dateLabel) === -1) {
+    return '"' + dateLabel + '" is not an open date on the form (already taken, or not a valid date).';
+  }
+
+  const props = PropertiesService.getScriptProperties();
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  if (!scheduleId || !mapJson) {
+    return 'SCHEDULE_ID/SCHEDULE_MAP not set — re-run createSignupForm() to create the schedule sheet.';
+  }
+  const dateMap = JSON.parse(mapJson);
+  const cellRef = dateMap[dateLabel.trim()];
+  if (!cellRef) {
+    return 'Could not find "' + dateLabel + '" in the schedule calendar.';
+  }
+
+  // 1) Remove the taken date from the form
+  const remaining = choices.filter(v => v !== dateLabel);
   if (remaining.length > 0) {
     listItem.setChoiceValues(remaining);
   } else {
@@ -349,20 +808,6 @@ function onSignup(e) {
   }
 
   // 2) Write the name into the right day-square on the public calendar
-  const props = PropertiesService.getScriptProperties();
-  const scheduleId = props.getProperty('SCHEDULE_ID');
-  const mapJson = props.getProperty('SCHEDULE_MAP');
-  if (!scheduleId || !mapJson) {
-    console.error('SCHEDULE_ID/SCHEDULE_MAP not set — re-run createSignupForm to create the schedule sheet.');
-    return;
-  }
-  const dateMap = JSON.parse(mapJson);
-  const cellRef = dateMap[chosenDate.trim()];
-  if (!cellRef) {
-    console.error('Could not find "' + chosenDate + '" in the schedule calendar.');
-    return;
-  }
-
   const sheet = SpreadsheetApp.openById(scheduleId).getSheetByName('Schedule');
   const cell = sheet.getRange(cellRef.row, cellRef.col);
   // Cell text is "day number\nstatus" — keep the day number, replace
@@ -380,8 +825,58 @@ function onSignup(e) {
   cell.setRichTextValue(richText);
   cell.setBackground('#93c47d');
 
-  // 3) Email the signer a confirmation + calendar invite
-  sendConfirmationEmail(email, name, chosenDate, cellRef.iso);
+  // 3) Email the signer a confirmation + calendar invite, if given one
+  if (email) sendConfirmationEmail(email, name, dateLabel, cellRef.iso);
+
+  return null;
+}
+
+/** Looks up the dateLabel (e.g. 'Tuesday, September 1, 2026') whose iso date matches isoDate, or null if none does. */
+function findDateLabel(isoDate) {
+  const mapJson = PropertiesService.getScriptProperties().getProperty('SCHEDULE_MAP');
+  const dateMap = mapJson ? JSON.parse(mapJson) : {};
+  return Object.keys(dateMap).find(label => dateMap[label].iso === isoDate) || null;
+}
+
+/** Creates the "Quick Add" tab on the private responses spreadsheet, for phone/in-person signups. */
+function setupQuickAddSheet(responsesSs) {
+  const sheet = responsesSs.insertSheet('Quick Add');
+  sheet.getRange(1, 1, 1, 5)
+    .setValues([['Name', 'Phone', 'Email (optional)', 'Date (yyyy-mm-dd)', 'Status']])
+    .setFontWeight('bold')
+    .setBackground('#4a86e8')
+    .setFontColor('#ffffff');
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidths(1, 5, 160);
+  // Keep the date column as plain text so typed dates aren't silently
+  // reformatted into a Date serial, which findDateLabel() wouldn't match.
+  sheet.getRange(2, 4, 500, 1).setNumberFormat('@');
+  sheet.getRange('A1').setNote(
+    'For phone/in-person signups: fill in Name and Date (yyyy-mm-dd) on a ' +
+    'new row (Phone/Email optional). It\'ll be claimed on the form and ' +
+    'calendar automatically, and added as a row on the "Form Responses" ' +
+    'tab too, so that stays a complete roster. Status will fill in with ' +
+    '"Done" or an error message. Leave Status blank — do not edit it yourself.');
+}
+
+/** Creates the "Quick Cancel" tab on the private responses spreadsheet, for reopening a date someone had to back out of. */
+function setupQuickCancelSheet(responsesSs) {
+  const sheet = responsesSs.insertSheet('Quick Cancel');
+  sheet.getRange(1, 1, 1, 2)
+    .setValues([['Date (yyyy-mm-dd)', 'Status']])
+    .setFontWeight('bold')
+    .setBackground('#4a86e8')
+    .setFontColor('#ffffff');
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidths(1, 2, 220);
+  // Keep the date column as plain text so typed dates aren't silently
+  // reformatted into a Date serial, which findDateLabel() wouldn't match.
+  sheet.getRange(2, 1, 500, 1).setNumberFormat('@');
+  sheet.getRange('A1').setNote(
+    'To reopen a date someone had to cancel: type the date (yyyy-mm-dd) ' +
+    'on a new row. It clears the calendar square and puts that date back ' +
+    'on the form automatically, and Status will fill in with "Reopened" ' +
+    'or a message. Leave Status blank — do not edit it yourself.');
 }
 
 /** Finds one item response by its question title. */
@@ -395,10 +890,8 @@ function sendConfirmationEmail(email, name, chosenDate, isoDate) {
   const subject = 'You\'re signed up to feed the missionaries — ' + chosenDate;
   const body =
     'Hi ' + name + ',\n\n' +
-    'You\'re confirmed to bring dinner for the missionaries on ' + chosenDate + '.\n\n' +
+    'You\'re confirmed to feed the missionaries on ' + chosenDate + '.\n\n' +
     'A calendar invite is attached — open it to add the date to your calendar.\n\n' +
-    'If your plans change, please let us know as soon as possible so we can ' +
-    'find someone else to cover that day.\n\n' +
     'Thank you!';
 
   const ics = buildIcsInvite('Missionary Dinner', body, isoDate);
