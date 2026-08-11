@@ -21,7 +21,8 @@
  * SETUP (one time, ~3 minutes):
  *  1. Go to https://script.google.com and click "New project"
  *  2. Delete the sample code and paste this entire file in
- *  3. Change START_DATE and END_DATE below to your months
+ *  3. Change START_DATE, END_DATE, and WARD_NAME below to your months
+ *     and ward
  *  4. Click the "Save" icon, then select "createSignupForm" in the
  *     function dropdown at the top and click "Run"
  *  5. Approve the permissions prompt (it's your own script — Google
@@ -78,12 +79,13 @@
 // ======== EDIT THESE ========
 const START_DATE = '2026-09-01';   // yyyy-mm-dd
 const END_DATE   = '2026-09-30';   // yyyy-mm-dd
-const FORM_TITLE = 'Missionary Meal Sign-Up';
+const WARD_NAME = 'Plano 4th Ward';
+const FORM_TITLE = WARD_NAME + ' Missionary Meal Sign-Up';
 const FOLDER_NAME = 'Missionary Meals';
 const DESCRIPTION =
-  'Thank you for signing up to feed the missionaries! ' +
-  'Choose an available date below. Each date can only be taken once — ' +
-  'dates disappear from the list as they are claimed.';
+  'Thank you for signing up to feed the missionaries! Each family has been ' +
+  'asked to sign-up once every 4-6 weeks. When you choose a date below, ' +
+  'it will disappear from the available list.';
 
 // Calendar invite settings — used only for the .ics file emailed to
 // whoever signs up, not shown anywhere else.
@@ -154,7 +156,7 @@ function createSignupForm() {
 
   // Optional: add the schedule link to the form description
   form.setDescription(DESCRIPTION +
-    '\n\nSee who has already signed up: ' + scheduleSs.getUrl());
+    '\n\n📅 You can view the current meal calendar by month here:\n' + scheduleSs.getUrl());
 
   Logger.log('SIGN-UP link (share with congregation):\n' + form.getPublishedUrl());
   Logger.log('SCHEDULE link (read-only, share with congregation):\n' + scheduleSs.getUrl());
