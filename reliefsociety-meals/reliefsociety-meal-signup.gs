@@ -1392,7 +1392,25 @@ function claimDate(props, personKey, form, dateLabel, name, email) {
   } else {
     listItem.setChoiceValues(['(All dates are filled)']);
     form.setAcceptingResponses(false);
-    form.setCustomClosedFormMessage('All dates are filled — thank you so much!');
+    // Best-effort only, wrapped so a failure here (e.g. Forms
+    // rejecting this text for some reason) can NEVER stop the rest of
+    // claimDate() from running — step 2 below (marking the calendar)
+    // and step 3 (the confirmation email) are the actual point of
+    // this function and must always complete regardless of whether
+    // this cosmetic message succeeds.
+    try {
+      // Same auto-linkify behavior the form description already
+      // relies on for its calendar link — Forms turns a plain URL in
+      // this message into a clickable link on the "not accepting
+      // responses" page. Kept to one line/no emoji here (unlike the
+      // description) since a multi-line version of this specific call
+      // is what threw "Invalid data updating form" in testing.
+      form.setCustomClosedFormMessage(
+        'All dates are filled — thank you so much! You can still view the calendar here: ' +
+        SpreadsheetApp.openById(scheduleId).getUrl());
+    } catch (err) {
+      console.error('Could not set the closed-form message for "' + personKey + '": ' + err);
+    }
   }
 
   // 2) Write the name into the right day-square on the public calendar
