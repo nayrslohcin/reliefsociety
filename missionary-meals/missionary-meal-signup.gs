@@ -155,6 +155,18 @@ function createSignupForm() {
     return;
   }
 
+  // Bail out before creating anything if the date range has no
+  // sign-up-able days left — e.g. START_DATE/END_DATE were left on a
+  // month that has already passed, since buildDateList() only keeps
+  // today onward. Checked here, not after FormApp.create(), so a bad
+  // range doesn't leave a half-made form behind in Drive.
+  const dates = buildDateList();
+  if (dates.length === 0) {
+    throw new Error('No available dates between ' + START_DATE + ' and ' + END_DATE +
+      ' — that range is entirely in the past, or every day in it is a Monday. ' +
+      'Update START_DATE/END_DATE above to a current or upcoming month, then run createSignupForm() again.');
+  }
+
   const form = FormApp.create(FORM_TITLE);
   form.setDescription(DESCRIPTION);
   form.setLimitOneResponsePerUser(false); // set true to limit 1 signup per Google account
@@ -164,7 +176,6 @@ function createSignupForm() {
   form.addTextItem().setTitle(Q_EMAIL).setRequired(true)
     .setValidation(FormApp.createTextValidation().requireTextIsEmail().build());
 
-  const dates = buildDateList();
   const dateItem = form.addListItem()
     .setTitle('Choose a date')
     .setRequired(true);
@@ -296,10 +307,6 @@ function extendSignupForm() {
   const form = FormApp.openById(formId);
   const scheduleSs = SpreadsheetApp.openById(scheduleId);
 
-  // Re-open in case the last batch of dates filled up and the form
-  // auto-closed itself
-  form.setAcceptingResponses(true);
-
   // Keep still-open, still-future choices from before; drop the
   // "all filled" placeholder and anything now in the past
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
@@ -323,7 +330,17 @@ function extendSignupForm() {
       new Date(cell.isoDate + 'T00:00:00') >= today)
     .map(cell => cell.dateLabel);
   const merged = keptChoices.concat(newDates.filter(d => keptChoices.indexOf(d) === -1));
+  if (merged.length === 0) {
+    throw new Error('No available dates between ' + START_DATE + ' and ' + END_DATE +
+      ' — that range is entirely in the past, or every day in it is a Monday. ' +
+      'Update START_DATE/END_DATE above to a current or upcoming month, then run extendSignupForm() again.');
+  }
   listItem.setChoiceValues(merged);
+
+  // Re-open in case the last batch of dates filled up and the form
+  // auto-closed itself. Done after the merged-choices check above, so
+  // an empty range can't reopen a filled form onto a placeholder.
+  form.setAcceptingResponses(true);
 
   // Append the new calendar block(s) below whatever is already drawn
   const sheet = scheduleSs.getSheetByName('Schedule') || scheduleSs.getActiveSheet();
