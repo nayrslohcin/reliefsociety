@@ -57,6 +57,14 @@
  * (The script-editor equivalent of "Quick Cancel": set CANCEL_DATE
  * below to a date and run cancelSignup().)
  *
+ * TO TAKE AN OLD MONTH OFF THE SCHEDULE once it's finished and you
+ * don't want it on the sheet any more: set REMOVE_MONTHS below to
+ * that month (yyyy-mm) and run removeOldMonths(). Do NOT just delete
+ * the rows yourself — the script remembers each date's row number on
+ * the sheet, so deleting rows by hand shifts the months below it and
+ * later signups land in the wrong squares. removeOldMonths() deletes
+ * the rows and fixes those saved row numbers together.
+ *
  * ALL FILES are placed in a Drive folder named "Missionary Meals"
  * (created automatically, reused on later runs). Do NOT share that
  * folder publicly — it contains the private responses sheet with
@@ -117,6 +125,14 @@ const MEAL_LOCATION = '';         // e.g. missionary apartment address; leave ''
 // someone had to cancel, then run cancelSignup(), so it reopens on
 // the form for someone else to grab.
 const CANCEL_DATE = '';           // yyyy-mm-dd, leave '' when not in use
+
+// Only used by removeOldMonths() — set this to the finished month(s)
+// you want taken off the schedule sheet, then run removeOldMonths().
+// Do NOT delete those rows by hand (see that function's notes).
+const REMOVE_MONTHS = '';         // e.g. '2026-08' or '2026-08,2026-09'
+// Safety catch: removeOldMonths() refuses to remove the current month
+// or a future one unless you flip this to true.
+const REMOVE_MONTHS_FORCE = false;
 // ============================
 
 const Q_NAME = 'Your name';
@@ -383,6 +399,181 @@ function cancelSignup() {
   const form = FormApp.openById(formId);
   const result = releaseDate(form, label);
   Logger.log(result || (label + ' is available again — back on the form for someone else to sign up.'));
+}
+
+/**
+ * Removes one or more finished month blocks from the schedule sheet,
+ * so it doesn't grow forever. Set REMOVE_MONTHS above to the month(s)
+ * you want gone (yyyy-mm, comma-separated) and run this.
+ *
+ * DO NOT delete those rows by hand. The script remembers each date's
+ * exact row/column on the sheet (the SCHEDULE_MAP script property),
+ * so deleting rows above a month shifts every later month up and the
+ * script would then write names into the wrong squares — silently.
+ * This function deletes the rows AND repairs that saved map in the
+ * same step, which is the part a manual delete can't do.
+ *
+ * What it does:
+ *  - Deletes the whole block for each month named (title row, weekday
+ *    header, week rows, and the blank separator row after it)
+ *  - Shifts the saved row numbers of every month BELOW it back up to
+ *    match, and drops the removed months' dates from the map
+ *  - Removes any of those dates that were still on the form's dropdown
+ *  - Forgets those months in ADDED_MONTHS, so extendSignupForm() could
+ *    add them again later if you ever wanted them back
+ *
+ * The sign-up link and schedule link don't change, and the months you
+ * keep — including who is signed up on them — are left exactly as they
+ * are. Past signups stay listed on the "Form Responses" tab of the
+ * private responses spreadsheet either way; this only touches the
+ * public calendar.
+ */
+function removeOldMonths() {
+  const props = PropertiesService.getScriptProperties();
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  if (!scheduleId || !mapJson) {
+    throw new Error('No existing schedule found — run createSignupForm() first.');
+  }
+
+  const requested = REMOVE_MONTHS.split(',').map(s => s.trim()).filter(s => s);
+  if (requested.length === 0) {
+    throw new Error('Set REMOVE_MONTHS above to the month(s) you want removed (yyyy-mm, comma-separated), then run removeOldMonths() again.');
+  }
+  const malformed = requested.filter(k => !/^\d{4}-\d{2}$/.test(k));
+  if (malformed.length > 0) {
+    throw new Error('REMOVE_MONTHS must be month(s) in yyyy-mm form, e.g. "2026-08" — got: ' + malformed.join(', '));
+  }
+
+  // Guard against wiping out the month people are actively signing up
+  // for. Flip REMOVE_MONTHS_FORCE to true only if you really mean it.
+  const thisMonth = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM');
+  const notFinished = requested.filter(k => k >= thisMonth);
+  if (notFinished.length > 0 && !REMOVE_MONTHS_FORCE) {
+    throw new Error('Refusing to remove ' + notFinished.join(', ') +
+      ' — that month is the current one or still in the future, and people may be signed up on it. ' +
+      'Set REMOVE_MONTHS_FORCE = true above if you really want to remove it.');
+  }
+
+  const ss = SpreadsheetApp.openById(scheduleId);
+  const sheet = ss.getSheetByName('Schedule') || ss.getActiveSheet();
+  const blocks = findMonthBlocks(sheet);
+
+  const targets = blocks.filter(b => requested.indexOf(b.key) !== -1);
+  const missing = requested.filter(k => !blocks.some(b => b.key === k));
+  if (missing.length > 0) {
+    Logger.log('Not on the schedule, skipping: ' + missing.join(', '));
+  }
+  if (targets.length === 0) {
+    Logger.log('Nothing to remove — the schedule sheet has: ' +
+      (blocks.map(b => b.label).join(', ') || '(no month blocks found)'));
+    return;
+  }
+
+  const dateMap = JSON.parse(mapJson);
+  const removedKeys = targets.map(b => b.key);
+  const removedLabels = Object.keys(dateMap)
+    .filter(label => removedKeys.indexOf(dateMap[label].iso.slice(0, 7)) !== -1);
+
+  // Delete bottom block first, so the earlier blocks' row numbers are
+  // still correct when we get to them
+  targets.slice()
+    .sort((a, b) => b.startRow - a.startRow)
+    .forEach(b => sheet.deleteRows(b.startRow, b.endRow - b.startRow + 1));
+
+  // Repair the saved date -> cell map: drop the removed months, and
+  // move every surviving square up by however many rows were deleted
+  // above it, so it still points at its own day box
+  const newMap = {};
+  Object.keys(dateMap).forEach(label => {
+    if (removedLabels.indexOf(label) !== -1) return;
+    const ref = dateMap[label];
+    const shift = targets.reduce(
+      (n, b) => ref.row > b.endRow ? n + (b.endRow - b.startRow + 1) : n, 0);
+    newMap[label] = { row: ref.row - shift, col: ref.col, iso: ref.iso };
+  });
+  props.setProperty('SCHEDULE_MAP', JSON.stringify(newMap));
+
+  // Take the removed months' dates off the dropdown, in case any of
+  // them were still open for sign-up
+  const formId = props.getProperty('FORM_ID');
+  if (formId && removedLabels.length > 0) {
+    const form = FormApp.openById(formId);
+    const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+    const kept = listItem.getChoices()
+      .map(c => c.getValue())
+      .filter(v => v !== '(All dates are filled)' && removedLabels.indexOf(v) === -1);
+    if (kept.length > 0) {
+      listItem.setChoiceValues(kept);
+    } else {
+      listItem.setChoiceValues(['(All dates are filled)']);
+      form.setAcceptingResponses(false);
+      form.setCustomClosedFormMessage('All dates are filled — thank you so much!');
+      Logger.log('No open dates are left on the form, so it is closed for now — run extendSignupForm() with a new month to reopen it.');
+    }
+  }
+
+  // Forget them, so extendSignupForm() would be allowed to draw them
+  // again if you ever want that month back
+  const addedMonths = JSON.parse(props.getProperty('ADDED_MONTHS') || '[]');
+  props.setProperty('ADDED_MONTHS',
+    JSON.stringify(addedMonths.filter(k => removedKeys.indexOf(k) === -1)));
+
+  Logger.log('Removed from the schedule: ' + targets.map(b => b.label).join(', '));
+  Logger.log('Still on the schedule: ' +
+    (blocks.filter(b => removedKeys.indexOf(b.key) === -1).map(b => b.label).join(', ') || '(none)'));
+  Logger.log('SIGN-UP and SCHEDULE links are unchanged.');
+  Logger.log('Signups for the removed months are still on the "Form Responses" tab of the private responses spreadsheet.');
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+/**
+ * Finds each month block already drawn on the schedule sheet, by
+ * looking for the merged "MMMM yyyy" title rows renderSchedule()
+ * writes in column A. Returns [{key, label, startRow, endRow}] in
+ * sheet order, where endRow runs to just before the next block's
+ * title — so removing a block takes its trailing blank separator row
+ * with it and doesn't leave a gap behind.
+ */
+function findMonthBlocks(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 1) return [];
+
+  const colA = sheet.getRange(1, 1, lastRow, 1).getValues();
+  const blocks = [];
+  colA.forEach((row, i) => {
+    const key = monthTitleToKey(row[0]);
+    if (key) {
+      blocks.push({
+        key: key,
+        label: MONTH_NAMES[Number(key.slice(5, 7)) - 1] + ' ' + key.slice(0, 4),
+        startRow: i + 1
+      });
+    }
+  });
+  blocks.forEach((b, i) => {
+    b.endRow = i + 1 < blocks.length ? blocks[i + 1].startRow - 1 : lastRow;
+  });
+  return blocks;
+}
+
+/**
+ * Turns a month title cell into a 'yyyy-MM' key, or null if the cell
+ * isn't a month title (a day square, a weekday header, a blank...).
+ * Handles the value coming back as a Date, in case Sheets decided to
+ * parse "August 2026" as one.
+ */
+function monthTitleToKey(value) {
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM');
+  }
+  const parts = String(value).trim().split(/\s+/);
+  if (parts.length !== 2) return null;
+  const monthIndex = MONTH_NAMES.indexOf(parts[0]);
+  if (monthIndex === -1 || !/^\d{4}$/.test(parts[1])) return null;
+  return parts[1] + '-' + ('0' + (monthIndex + 1)).slice(-2);
 }
 
 /**
