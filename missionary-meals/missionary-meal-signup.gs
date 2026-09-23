@@ -15,7 +15,11 @@
  *    on every signup — share that link with everyone
  *  - The person who just signed up gets a confirmation email with a
  *    .ics calendar invite attached, so they can add the meal date to
- *    their own calendar in one tap
+ *    their own calendar in one tap — the email question is optional,
+ *    so anyone who'd rather not leave one just doesn't get that
+ *  - The form closes itself for all of Sunday and reopens Sunday
+ *    evening, so online sign-ups can't double-book a date someone
+ *    already took on the paper sheet at church
  *  - When every date is taken, the form closes itself
  *
  * SETUP (one time, ~3 minutes):
@@ -33,6 +37,36 @@
  *       - the SCHEDULE link (read-only) so anyone can see who has
  *         signed up for which day
  *       - your private responses spreadsheet (includes phone numbers)
+ *
+ * The email question is optional. A form created before it became
+ * optional keeps whatever it was set to until you run
+ * makeEmailOptional() (extendSignupForm() runs it for you).
+ *
+ * THE SUNDAY PAUSE:
+ * The form closes at midnight Saturday night, stays closed all of
+ * Sunday showing PAUSED_MESSAGE, and reopens Sunday at 7 PM
+ * (REOPEN_HOUR) — so nobody signs up online for a date that was just
+ * claimed on the paper sheet at church. It runs on a trigger that
+ * checks every 5 minutes, so each switch is accurate to within about
+ * five minutes, and it puts the form back if something reopens it
+ * mid-Sunday.
+ *  - createSignupForm() turns it on by itself. On a form that
+ *    ALREADY EXISTS, run setupSundayTrigger() once by hand.
+ *  - Set the project's TIME ZONE first: Project Settings (the gear
+ *    icon) > Time zone > Central Time – Chicago. If it's wrong, the
+ *    form closes and reopens at the wrong hour. Run
+ *    previewSundaySchedule() to check — it prints the time zone and
+ *    what the script thinks today is, and changes nothing.
+ *  - This only prevents double-booking if the paper names are typed
+ *    into the "Quick Add" tab before 7 PM Sunday. Raise REOPEN_HOUR
+ *    (21 = 9 PM) to allow more time for that.
+ *  - If every date is taken, the form stays closed past 7 PM and goes
+ *    back to saying so — it won't reopen onto an empty dropdown.
+ *  - To turn it off: set SUNDAY_PAUSE = false, or delete the
+ *    checkSundaySchedule trigger under the clock icon. While it's on,
+ *    it owns whether the form is open, so closing the form by hand
+ *    for some other reason won't stick — it reopens within 5 minutes
+ *    as long as a date is still available.
  *
  * To open up a new month, update START_DATE/END_DATE and run
  * extendSignupForm() instead — it adds the new dates to the SAME
@@ -101,7 +135,8 @@
  * directly, so DriveApp.getFileById()/moveTo()/setSharing() on
  * these files fails with a permissions error under that scope.
  * script.send_mail is required for the confirmation email/calendar
- * invite sent to each person after they sign up.
+ * invite sent to each person who leaves an email address when they
+ * sign up.
  */
 
 // ======== EDIT THESE ========
@@ -133,11 +168,30 @@ const REMOVE_MONTHS = '';         // e.g. '2026-08' or '2026-08,2026-09'
 // Safety catch: removeOldMonths() refuses to remove the current month
 // or a future one unless you flip this to true.
 const REMOVE_MONTHS_FORCE = false;
+
+// Sunday pause — the form closes for all of Sunday so online sign-ups
+// can't double-book a date someone already claimed on the paper sheet
+// being passed around at church, then reopens Sunday evening. Run
+// setupSundayTrigger() once to start it (see the notes up top).
+const SUNDAY_PAUSE = true;        // set false to stop pausing
+const PAUSE_DAY = 0;              // 0 = Sun, 1 = Mon ... 6 = Sat
+const REOPEN_HOUR = 19;           // 7 PM, 24-hour — when it reopens
+const PAUSED_MESSAGE =
+  'Online sign-ups are paused on Sundays while the paper sign-up sheet is ' +
+  'passed around at church. The form reopens tonight at ' + formatHour(REOPEN_HOUR) +
+  '. Thank you for feeding the missionaries!';
 // ============================
 
 const Q_NAME = 'Your name';
 const Q_PHONE = 'Phone number';
-const Q_EMAIL = 'Email address (for your confirmation + calendar invite)';
+const Q_EMAIL = 'Email address (optional — for your confirmation + calendar invite)';
+
+// The single placeholder choice left on the dropdown when every date
+// is taken, and the message shown on the closed form when that
+// happens. Constants because the sign-up, month-removal, and Sunday
+// pause paths all have to agree on them exactly.
+const ALL_FILLED_CHOICE = '(All dates are filled)';
+const FULL_MESSAGE = 'All dates are filled — thank you so much!';
 
 function createSignupForm() {
   // Refuse to create a second form if one already exists in the
@@ -173,7 +227,9 @@ function createSignupForm() {
 
   form.addTextItem().setTitle(Q_NAME).setRequired(true);
   form.addTextItem().setTitle(Q_PHONE).setRequired(true);
-  form.addTextItem().setTitle(Q_EMAIL).setRequired(true)
+  // Optional: no email just means no confirmation/calendar invite.
+  // The validation only kicks in when the box isn't left empty.
+  form.addTextItem().setTitle(Q_EMAIL).setRequired(false)
     .setValidation(FormApp.createTextValidation().requireTextIsEmail().build());
 
   const dateItem = form.addListItem()
@@ -246,6 +302,9 @@ function createSignupForm() {
     .onEdit()
     .create();
 
+  // Trigger: closes the form for Sunday and reopens it that evening
+  if (SUNDAY_PAUSE) setupSundayTrigger();
+
   // Optional: add the schedule link to the form description
   form.setDescription(DESCRIPTION +
     '\n\n📅 You can view the current meal calendar by month here:\n' + scheduleSs.getUrl());
@@ -307,6 +366,10 @@ function extendSignupForm() {
   const form = FormApp.openById(formId);
   const scheduleSs = SpreadsheetApp.openById(scheduleId);
 
+  // Bring a form made before the email question became optional up to
+  // date while we're already touching it
+  makeEmailOptional();
+
   // Keep still-open, still-future choices from before; drop the
   // "all filled" placeholder and anything now in the past
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
@@ -314,7 +377,7 @@ function extendSignupForm() {
   today.setHours(0, 0, 0, 0);
   const keptChoices = listItem.getChoices()
     .map(c => c.getValue())
-    .filter(v => v !== '(All dates are filled)')
+    .filter(v => v !== ALL_FILLED_CHOICE)
     .filter(v => {
       const d = parseDateLabel(v);
       return d && d >= today;
@@ -341,6 +404,10 @@ function extendSignupForm() {
   // auto-closed itself. Done after the merged-choices check above, so
   // an empty range can't reopen a filled form onto a placeholder.
   form.setAcceptingResponses(true);
+  if (inSundayPause(new Date())) {
+    Logger.log('NOTE: the Sunday pause is on right now, so the form will close itself again ' +
+      'within 5 minutes and reopen at ' + formatHour(REOPEN_HOUR) + ' tonight. The new dates are added either way.');
+  }
 
   // Append the new calendar block(s) below whatever is already drawn
   const sheet = scheduleSs.getSheetByName('Schedule') || scheduleSs.getActiveSheet();
@@ -416,6 +483,114 @@ function cancelSignup() {
   const form = FormApp.openById(formId);
   const result = releaseDate(form, label);
   Logger.log(result || (label + ' is available again — back on the form for someone else to sign up.'));
+}
+
+/**
+ * 19 -> '7 PM', 9 -> '9 AM'. Used so PAUSED_MESSAGE and the log lines
+ * follow REOPEN_HOUR automatically instead of saying "7 PM" after you
+ * change it. (Safe to call from a const up top — function
+ * declarations are hoisted above them.)
+ */
+function formatHour(hour24) {
+  const suffix = hour24 < 12 ? 'AM' : 'PM';
+  return (hour24 % 12 === 0 ? 12 : hour24 % 12) + ' ' + suffix;
+}
+
+/** True while the form should be paused for the paper sign-up sheet (Sunday before REOPEN_HOUR). */
+function inSundayPause(now) {
+  // getDay()/getHours() resolve against the Apps Script project's time
+  // zone (Project Settings > gear icon), same as buildDateList() below
+  // relies on — so that setting has to be right or this closes at the
+  // wrong hour.
+  return SUNDAY_PAUSE && now.getDay() === PAUSE_DAY && now.getHours() < REOPEN_HOUR;
+}
+
+/**
+ * Runs every 5 minutes (see setupSundayTrigger) and keeps the form's
+ * open/closed state matching the Sunday pause window.
+ *
+ * During the window: closed, showing PAUSED_MESSAGE — whatever else
+ * had closed it, since "we're closed today for the paper sheet" is
+ * the more useful thing to say on a Sunday.
+ *
+ * Outside it: open again, BUT only if the dropdown still has a real
+ * date on it. If every date is taken, claimDate() closed the form on
+ * purpose and it stays closed — reopening it would leave people able
+ * to submit the ALL_FILLED_CHOICE placeholder, which onSignup() then
+ * rejects to a log nobody reads, so they'd think they were signed up
+ * when they weren't.
+ */
+function checkSundaySchedule() {
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (!formId) return; // createSignupForm() hasn't run yet
+  const form = FormApp.openById(formId);
+
+  if (inSundayPause(new Date())) {
+    // Only write when it actually differs — this runs 288 times a day
+    if (form.getCustomClosedFormMessage() !== PAUSED_MESSAGE) {
+      form.setCustomClosedFormMessage(PAUSED_MESSAGE);
+    }
+    if (form.isAcceptingResponses()) form.setAcceptingResponses(false);
+    return;
+  }
+
+  // Outside the window the sign-up logic owns the form's state again
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const openDates = listItem.getChoices()
+    .map(c => c.getValue())
+    .filter(v => v !== ALL_FILLED_CHOICE);
+
+  if (openDates.length > 0) {
+    if (!form.isAcceptingResponses()) form.setAcceptingResponses(true);
+    return;
+  }
+
+  // Every date is taken: stay closed, and put back the message the
+  // pause overwrote on Sunday
+  if (form.getCustomClosedFormMessage() !== FULL_MESSAGE) {
+    form.setCustomClosedFormMessage(FULL_MESSAGE);
+  }
+  if (form.isAcceptingResponses()) form.setAcceptingResponses(false);
+}
+
+/**
+ * Starts (or restarts) the Sunday pause. Run this once by hand on a
+ * form that already exists — createSignupForm() sets it up itself for
+ * a brand new one. Safe to re-run.
+ */
+function setupSundayTrigger() {
+  // Delete only OUR trigger, by name — a blanket
+  // getProjectTriggers().forEach(deleteTrigger) here would also take
+  // out onSignup and onResponsesEdit, leaving a form that accepts
+  // sign-ups while nothing updates the calendar or the dropdown.
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'checkSundaySchedule')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('checkSundaySchedule').timeBased().everyMinutes(5).create();
+  Logger.log('Sunday pause is on: the form closes at midnight Saturday night and reopens Sunday at ' +
+    formatHour(REOPEN_HOUR) + '.');
+  checkSundaySchedule(); // don't wait up to 5 minutes for the first run
+}
+
+/**
+ * Prints what checkSundaySchedule() would do right now, without
+ * touching the form — use it to confirm the project's time zone and
+ * day/hour are what you expect. To test the close itself without
+ * waiting for Sunday, set PAUSE_DAY above to today's number, run
+ * checkSundaySchedule(), look at the live form, then set PAUSE_DAY
+ * back to 0 and run it again.
+ */
+function previewSundaySchedule() {
+  const now = new Date();
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  Logger.log('Script time zone: ' + Session.getScriptTimeZone() +
+    ' (set this under Project Settings — the gear icon)');
+  Logger.log('The script thinks it is now: ' + days[now.getDay()] + ', ' + now.getHours() + ':00');
+  Logger.log('Pausing on: ' + days[PAUSE_DAY] + ' until ' + formatHour(REOPEN_HOUR) +
+    (SUNDAY_PAUSE ? '' : ' — but SUNDAY_PAUSE is false, so the pause is off'));
+  Logger.log(inSundayPause(now)
+    ? 'Right now: the form should be CLOSED for the paper sign-up sheet.'
+    : 'Right now: the form should be OPEN (unless every date is already taken).');
 }
 
 /**
@@ -519,13 +694,13 @@ function removeOldMonths() {
     const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
     const kept = listItem.getChoices()
       .map(c => c.getValue())
-      .filter(v => v !== '(All dates are filled)' && removedLabels.indexOf(v) === -1);
+      .filter(v => v !== ALL_FILLED_CHOICE && removedLabels.indexOf(v) === -1);
     if (kept.length > 0) {
       listItem.setChoiceValues(kept);
     } else {
-      listItem.setChoiceValues(['(All dates are filled)']);
+      listItem.setChoiceValues([ALL_FILLED_CHOICE]);
       form.setAcceptingResponses(false);
-      form.setCustomClosedFormMessage('All dates are filled — thank you so much!');
+      form.setCustomClosedFormMessage(FULL_MESSAGE);
       Logger.log('No open dates are left on the form, so it is closed for now — run extendSignupForm() with a new month to reopen it.');
     }
   }
@@ -643,7 +818,7 @@ function releaseDate(form, dateLabel) {
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
   const choices = listItem.getChoices()
     .map(c => c.getValue())
-    .filter(v => v !== '(All dates are filled)');
+    .filter(v => v !== ALL_FILLED_CHOICE);
   if (choices.indexOf(dateLabel) === -1) choices.push(dateLabel);
 
   // Keep the dropdown in chronological order
@@ -855,7 +1030,7 @@ function onSignup(e) {
     .find(r => r.getItem().getId() === listItem.getId())
     .getResponse();
   const name = findResponse(responses, Q_NAME);
-  const email = findResponse(responses, Q_EMAIL);
+  const email = findEmailResponse(responses);
 
   const error = claimDate(form, chosenDate, name, email);
   if (error) console.error(error);
@@ -1010,9 +1185,9 @@ function claimDate(form, dateLabel, name, email) {
   if (remaining.length > 0) {
     listItem.setChoiceValues(remaining);
   } else {
-    listItem.setChoiceValues(['(All dates are filled)']);
+    listItem.setChoiceValues([ALL_FILLED_CHOICE]);
     form.setAcceptingResponses(false);
-    form.setCustomClosedFormMessage('All dates are filled — thank you so much!');
+    form.setCustomClosedFormMessage(FULL_MESSAGE);
   }
 
   // 2) Write the name into the right day-square on the public calendar
@@ -1034,7 +1209,9 @@ function claimDate(form, dateLabel, name, email) {
   cell.setBackground('#93c47d');
 
   // 3) Email the signer a confirmation + calendar invite, if given one
-  if (email) sendConfirmationEmail(email, name, dateLabel, cellRef.iso);
+  // — the email question is optional, and "Quick Add" rows often skip it
+  const address = String(email || '').trim();
+  if (address) sendConfirmationEmail(address, name, dateLabel, cellRef.iso);
 
   return null;
 }
@@ -1091,6 +1268,46 @@ function setupQuickCancelSheet(responsesSs) {
 function findResponse(responses, title) {
   const match = responses.find(r => r.getItem().getTitle() === title);
   return match ? match.getResponse() : '';
+}
+
+/**
+ * Pulls the email out of a submission. Matched on any question
+ * mentioning "email" rather than on Q_EMAIL exactly, so a form built
+ * before that question was reworded still works. Returns '' when the
+ * question was left blank — it's optional — which callers treat as
+ * "no confirmation email for this one".
+ */
+function findEmailResponse(responses) {
+  const match = responses.find(r => /email/i.test(r.getItem().getTitle()));
+  return match ? String(match.getResponse()).trim() : '';
+}
+
+/**
+ * Makes the email question optional (and reworded to say so) on the
+ * form that already exists, for forms created back when it was
+ * required. Safe to re-run — it's a no-op once the question is
+ * already optional. extendSignupForm() calls this, so opening up a
+ * new month brings an older form along too.
+ */
+function makeEmailOptional() {
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (!formId) {
+    throw new Error('No existing form found — run createSignupForm() first.');
+  }
+  const form = FormApp.openById(formId);
+  const item = form.getItems(FormApp.ItemType.TEXT)
+    .find(i => /email/i.test(i.getTitle()));
+  if (!item) {
+    Logger.log('No email question on the form — nothing to change.');
+    return;
+  }
+  const textItem = item.asTextItem();
+  if (!textItem.isRequired() && textItem.getTitle() === Q_EMAIL) {
+    Logger.log('Email question is already optional.');
+    return;
+  }
+  textItem.setTitle(Q_EMAIL).setRequired(false);
+  Logger.log('Email question is now optional.');
 }
 
 /** Emails the signer a confirmation with a .ics calendar invite attached. */
