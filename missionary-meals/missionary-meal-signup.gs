@@ -20,6 +20,8 @@
  *  - The form closes itself for all of Sunday and reopens Sunday
  *    evening, so online sign-ups can't double-book a date someone
  *    already took on the paper sheet at church
+ *  - Dates that have gone by are cleared off the form and marked
+ *    "(past)" on the calendar automatically each night
  *  - When every date is taken, the form closes itself
  *
  * SETUP (one time, ~3 minutes):
@@ -67,6 +69,20 @@
  *    it owns whether the form is open, so closing the form by hand
  *    for some other reason won't stick — it reopens within 5 minutes
  *    as long as a date is still available.
+ *
+ * CLEARING OUT DATES THAT HAVE GONE BY:
+ * Nothing removes a date from the sign-up dropdown just because it
+ * has passed — without this, someone could still pick last Thursday.
+ * pruneOldDates() takes past dates off the dropdown and marks their
+ * calendar squares "(past)", leaving days someone actually signed up
+ * for exactly as they are. It runs nightly between 1 and 2 AM.
+ *  - createSignupForm() turns it on by itself. On a form that
+ *    ALREADY EXISTS, run setupPruneTrigger() once by hand.
+ *  - previewOldDates() is a DRY RUN: it lists what would be removed
+ *    and kept, and changes nothing. Run it first.
+ *  - If pruning leaves no open dates at all, the form closes with the
+ *    same "all dates are filled" message it uses when the month fills
+ *    up. Run extendSignupForm() with a new month to reopen it.
  *
  * To open up a new month, update START_DATE/END_DATE and run
  * extendSignupForm() instead — it adds the new dates to the SAME
@@ -305,6 +321,9 @@ function createSignupForm() {
   // Trigger: closes the form for Sunday and reopens it that evening
   if (SUNDAY_PAUSE) setupSundayTrigger();
 
+  // Trigger: nightly clear-out of dates that have gone by
+  setupPruneTrigger();
+
   // Optional: add the schedule link to the form description
   form.setDescription(DESCRIPTION +
     '\n\n📅 You can view the current meal calendar by month here:\n' + scheduleSs.getUrl());
@@ -375,13 +394,7 @@ function extendSignupForm() {
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const keptChoices = listItem.getChoices()
-    .map(c => c.getValue())
-    .filter(v => v !== ALL_FILLED_CHOICE)
-    .filter(v => {
-      const d = parseDateLabel(v);
-      return d && d >= today;
-    });
+  const keptChoices = openFutureChoices(listItem, today);
 
   // New dropdown choices come only from the NOT-already-added months,
   // and only from today onward (in case START_DATE lands mid-month),
@@ -455,6 +468,153 @@ function greyOutPastDates(sheet, dateMap, today) {
       .setBackground('#efefef')
       .setFontColor('#999999');
   });
+}
+
+/** True if a dropdown choice is a real date that has already gone by. */
+function isPastChoice(value, today) {
+  if (value === ALL_FILLED_CHOICE) return false;
+  const d = parseDateLabel(value);
+  return !!d && d < today;
+}
+
+/**
+ * The dropdown choices someone could still actually sign up for:
+ * everything except the "all filled" placeholder and dates already
+ * past. Anything that doesn't parse as a date is KEPT — better to
+ * leave a choice we don't understand than to quietly delete it.
+ */
+function openFutureChoices(listItem, today) {
+  return listItem.getChoices()
+    .map(c => c.getValue())
+    .filter(v => v !== ALL_FILLED_CHOICE && !isPastChoice(v, today));
+}
+
+/**
+ * Works out what has gone stale: dates that have passed but are
+ * still sitting on the sign-up dropdown, and past calendar squares
+ * nobody claimed. Shared by pruneOldDates() and previewOldDates() so
+ * the dry run can't drift out of step with what actually happens.
+ */
+function findOldDates() {
+  const props = PropertiesService.getScriptProperties();
+  const formId = props.getProperty('FORM_ID');
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  if (!formId || !scheduleId || !mapJson) {
+    throw new Error('No existing form/schedule found — run createSignupForm() first.');
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const form = FormApp.openById(formId);
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const choices = listItem.getChoices().map(c => c.getValue());
+  const stale = choices.filter(v => isPastChoice(v, today));
+  const keep = openFutureChoices(listItem, today);
+
+  // Which past squares on the calendar are still showing "— available —"
+  // vs. already have a name on them (green) that must be left alone
+  const dateMap = JSON.parse(mapJson);
+  const sheet = SpreadsheetApp.openById(scheduleId).getSheetByName('Schedule');
+  const pastLabels = Object.keys(dateMap)
+    .filter(label => new Date(dateMap[label].iso + 'T00:00:00') < today);
+  const claimed = pastLabels.filter(label =>
+    sheet.getRange(dateMap[label].row, dateMap[label].col).getBackground() === '#93c47d');
+
+  return {
+    form: form, listItem: listItem, sheet: sheet, dateMap: dateMap, today: today,
+    stale: stale, keep: keep, pastLabels: pastLabels, claimed: claimed
+  };
+}
+
+/**
+ * Clears out dates that have gone by: takes them off the sign-up
+ * dropdown so nobody can still pick last week, and marks their
+ * calendar squares "(past)". Runs nightly on its own once
+ * setupPruneTrigger() has been run — nothing else in this script
+ * prunes the dropdown between months, so without it a date stays
+ * sign-up-able forever.
+ *
+ * Squares someone actually signed up for are left exactly as they
+ * are (greyOutPastDates skips them), so the calendar keeps its
+ * record of who fed the missionaries when.
+ *
+ * Run previewOldDates() first to see what it would change.
+ */
+function pruneOldDates() {
+  const state = findOldDates();
+
+  if (state.stale.length === 0) {
+    Logger.log('No past dates on the sign-up dropdown — nothing to remove.');
+  } else if (state.keep.length > 0) {
+    state.listItem.setChoiceValues(state.keep);
+    Logger.log('Removed ' + state.stale.length + ' past date(s) from the sign-up dropdown:\n  ' +
+      state.stale.join('\n  '));
+    Logger.log('Still open for sign-up: ' + state.keep.length + ' date(s).');
+  } else {
+    // Nothing left to sign up for. Close it the same way claimDate()
+    // does — same placeholder, same message — because
+    // checkSundaySchedule() restores FULL_MESSAGE whenever the
+    // dropdown is empty, and a different message here would just get
+    // overwritten on its next run.
+    state.listItem.setChoiceValues([ALL_FILLED_CHOICE]);
+    state.form.setAcceptingResponses(false);
+    state.form.setCustomClosedFormMessage(FULL_MESSAGE);
+    Logger.log('Removed the last ' + state.stale.length + ' past date(s) — no open dates are left, ' +
+      'so the form is closed for now. Run extendSignupForm() with a new month to reopen it.');
+  }
+
+  greyOutPastDates(state.sheet, state.dateMap, state.today);
+  Logger.log('Past days on the calendar are marked "(past)"; days someone signed up for are untouched.');
+}
+
+/**
+ * DRY RUN for pruneOldDates() — logs exactly what it would remove
+ * and keep, and changes nothing. Safe to run any time.
+ */
+function previewOldDates() {
+  const state = findOldDates();
+  const tz = Session.getScriptTimeZone();
+
+  Logger.log('DRY RUN — nothing is being changed.');
+  Logger.log('Today is ' + Utilities.formatDate(state.today, tz, 'EEEE, MMMM d, yyyy') + '.');
+
+  if (state.stale.length === 0) {
+    Logger.log('SIGN-UP DROPDOWN: nothing to remove — no past dates are on it.');
+  } else {
+    Logger.log('SIGN-UP DROPDOWN: would REMOVE these ' + state.stale.length + ' past date(s):\n  ' +
+      state.stale.join('\n  '));
+  }
+  Logger.log(state.keep.length > 0
+    ? 'SIGN-UP DROPDOWN: would KEEP these ' + state.keep.length + ' date(s):\n  ' + state.keep.join('\n  ')
+    : 'SIGN-UP DROPDOWN: nothing would be left, so the form would close until you add a new month.');
+
+  const toGrey = state.pastLabels.length - state.claimed.length;
+  Logger.log('CALENDAR: would mark ' + toGrey + ' past day(s) as "(past)". ' +
+    state.claimed.length + ' past day(s) have someone signed up and would be left alone.');
+
+  Logger.log('Run pruneOldDates() to actually apply this.');
+}
+
+/**
+ * Starts (or restarts) the nightly clear-out of past dates. Run this
+ * once by hand on a form that already exists — createSignupForm()
+ * sets it up itself for a brand new one. Safe to re-run.
+ *
+ * It does NOT prune right now, so you can still run previewOldDates()
+ * first; the trigger fires overnight.
+ */
+function setupPruneTrigger() {
+  // Delete only OUR trigger, by name — never a blanket wipe, which
+  // would take out onSignup/onResponsesEdit/checkSundaySchedule too
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'pruneOldDates')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('pruneOldDates').timeBased().atHour(1).everyDays(1).create();
+  Logger.log('Past dates will now be cleared off the form and calendar automatically, ' +
+    'some time between 1 and 2 AM each night.');
+  Logger.log('Nothing has been pruned yet — run previewOldDates() to see what is stale, then pruneOldDates().');
 }
 
 /**
@@ -534,11 +694,13 @@ function checkSundaySchedule() {
     return;
   }
 
-  // Outside the window the sign-up logic owns the form's state again
+  // Outside the window the sign-up logic owns the form's state again.
+  // Past dates don't count as open — a dropdown holding only stale
+  // dates would otherwise keep the form open with nothing to pick.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
-  const openDates = listItem.getChoices()
-    .map(c => c.getValue())
-    .filter(v => v !== ALL_FILLED_CHOICE);
+  const openDates = openFutureChoices(listItem, today);
 
   if (openDates.length > 0) {
     if (!form.isAcceptingResponses()) form.setAcceptingResponses(true);
