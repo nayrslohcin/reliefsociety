@@ -155,6 +155,11 @@
  * sign up.
  */
 
+// Bump this on every deploy, then run healthCheck() in both projects
+// to confirm they are running the same code. With copy/paste there is
+// nothing that can enforce that, so this is the next best thing.
+const SCRIPT_VERSION = '2026-09-22.1';
+
 // ======== EDIT THESE ========
 const START_DATE = '2026-08-01';   // yyyy-mm-dd
 const END_DATE   = '2026-08-31';   // yyyy-mm-dd
@@ -595,6 +600,95 @@ function previewOldDates() {
     state.claimed.length + ' past day(s) have someone signed up and would be left alone.');
 
   Logger.log('Run pruneOldDates() to actually apply this.');
+}
+
+/**
+ * Prints what this project is wired up to, and changes nothing.
+ *
+ * Run it straight after pasting new code, in BOTH the TEST and the
+ * live project. It answers the two questions that matter before you
+ * trust a deploy: am I looking at the project I think I am (the file
+ * names say TEST or they don't), and is everything still connected
+ * (four triggers, a sensible number of open dates). See DEPLOY.md.
+ */
+function healthCheck() {
+  const props = PropertiesService.getScriptProperties();
+  Logger.log('--- HEALTH CHECK ---');
+  Logger.log('Script version: ' + SCRIPT_VERSION);
+  Logger.log('Time zone: ' + Session.getScriptTimeZone() + '  (Sunday pause and nightly ' +
+    'pruning both depend on this being right)');
+  Logger.log('Configured range: ' + START_DATE + ' to ' + END_DATE + ' for ' + WARD_NAME);
+
+  const formId = props.getProperty('FORM_ID');
+  if (!formId) {
+    Logger.log('NO FORM YET — createSignupForm() has not been run in this project.');
+    return;
+  }
+
+  // Names, not just IDs: this is what tells you TEST from live at a glance
+  Logger.log('Form:     ' + describeFile(formId));
+  Logger.log('Schedule: ' + describeFile(props.getProperty('SCHEDULE_ID')));
+  Logger.log('Responses:' + describeFile(props.getProperty('RESPONSES_ID')));
+
+  const form = FormApp.openById(formId);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
+  const open = openFutureChoices(listItem, today);
+  const stale = listItem.getChoices()
+    .map(c => c.getValue())
+    .filter(v => isPastChoice(v, today));
+
+  Logger.log('Form is ' + (form.isAcceptingResponses() ? 'OPEN' : 'CLOSED') +
+    (form.isAcceptingResponses() ? '' : ' — message: "' + form.getCustomClosedFormMessage() + '"'));
+  Logger.log('Open dates: ' + open.length + (open.length ? '  (next: ' + open[0] + ')' : ''));
+  if (stale.length > 0) {
+    Logger.log('Past dates still on the dropdown: ' + stale.length + ' — run pruneOldDates().');
+  }
+  Logger.log('Months on the schedule: ' + (props.getProperty('ADDED_MONTHS') || '[]'));
+
+  const handlers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction()).sort();
+  Logger.log('Triggers (' + handlers.length + '): ' + (handlers.join(', ') || 'NONE'));
+  ['onSignup', 'onResponsesEdit', 'checkSundaySchedule', 'pruneOldDates'].forEach(name => {
+    if (handlers.indexOf(name) === -1) {
+      Logger.log('  MISSING: ' + name + ' — sign-ups or the automatic jobs will not work.');
+    }
+  });
+
+  Logger.log('Right now the Sunday pause says the form should be ' +
+    (inSundayPause(new Date()) ? 'CLOSED.' : 'OPEN (unless every date is taken).'));
+}
+
+/** 'name (id)' for a Drive file, or a note if it can't be opened. */
+function describeFile(id) {
+  if (!id) return '(not set)';
+  try {
+    return DriveApp.getFileById(id).getName() + '  [' + id + ']';
+  } catch (err) {
+    return '(could not open ' + id + ': ' + err + ')';
+  }
+}
+
+/**
+ * Dumps every script property as JSON, and changes nothing.
+ *
+ * Run this in the live project and keep the output BEFORE any change
+ * that touches the schedule — especially removeOldMonths(). The
+ * SCHEDULE_MAP it prints is the only record of which calendar square
+ * belongs to which date; it cannot be rebuilt from the sheet alone, and
+ * if it goes wrong the script carries on writing names into the wrong
+ * squares without any error.
+ *
+ * To restore: Project Settings > Script Properties, and paste a saved
+ * value back into the property it came from.
+ */
+function exportScriptProperties() {
+  const all = PropertiesService.getScriptProperties().getProperties();
+  Logger.log('--- SCRIPT PROPERTIES BACKUP ---');
+  Logger.log('Taken ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(),
+    'EEEE, MMMM d, yyyy') + ', script version ' + SCRIPT_VERSION);
+  Logger.log('Save this somewhere before changing anything to do with the schedule.');
+  Object.keys(all).sort().forEach(key => Logger.log(key + ' = ' + all[key]));
 }
 
 /**
