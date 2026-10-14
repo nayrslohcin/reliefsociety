@@ -166,6 +166,15 @@ class FakeSheet {
     return last;
   }
 
+  getLastColumn() {
+    let last = 0;
+    for (const [key, cell] of this.cells) {
+      if (cell.value === '' || cell.value === null || cell.value === undefined) continue;
+      last = Math.max(last, Number(key.split(',')[1]));
+    }
+    return last;
+  }
+
   appendRow(values) {
     const row = this.getLastRow() + 1;
     values.forEach((v, i) => { this._cell(row, i + 1).value = v; });
@@ -259,6 +268,7 @@ class FakeForm {
   getEditUrl() { return this.getUrl(); }
   getPublishedUrl() { return 'https://example.test/view'; }
   getName() { return 'Fake Form'; }
+  getTitle() { return 'Fake Form'; }
   setDescription(d) { this.description = d; return this; }
   setLimitOneResponsePerUser() { return this; }
   setDestination() { return this; }
@@ -345,7 +355,16 @@ function buildEnvironment(options) {
           let text = '';
           const builder = {
             setText: t => { text = t; return builder; },
-            setTextStyle: () => builder,
+            // The real API rejects an empty or out-of-bounds range with
+            // "Illegal argument", which is how a blank name took the
+            // live calendar down. Validate, or this fake hides it.
+            setTextStyle: (start, end) => {
+              if (typeof start !== 'number' || typeof end !== 'number' ||
+                  start < 0 || end > text.length || start >= end) {
+                throw new Error('Exception: Illegal argument.');
+              }
+              return builder;
+            },
             build: () => ({ getText: () => text })
           };
           return builder;

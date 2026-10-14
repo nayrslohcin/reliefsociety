@@ -70,6 +70,26 @@
  *    for some other reason won't stick — it reopens within 5 minutes
  *    as long as a date is still available.
  *
+ * IF SIGN-UPS ARE IN THE RESPONSES SHEET BUT NOT ON THE CALENDAR:
+ * Run diagnoseSignups(). It changes nothing and reports which of the
+ * handful of possible causes it is: a missing onSignup trigger, dates
+ * offered on the form that were never drawn on the calendar, a
+ * renamed "Schedule" tab, or names that never got written.
+ *
+ * Then previewCalendarRepair() lists the sign-ups it would put back
+ * on the calendar, reading the names out of the responses sheet, and
+ * repairCalendar() does it. Neither puts a date back on the form: a
+ * row in the responses sheet means the date is genuinely taken, and
+ * repairCalendar() will in fact take such a date back OFF the form if
+ * it somehow is still being offered, since that is a double booking
+ * waiting to happen.
+ *
+ * (This happened for real on 12 October 2026: a sign-up arrived with a
+ * blank name, and bolding a zero-length name threw "Illegal argument"
+ * AFTER the date had been removed from the form but BEFORE the square
+ * was written. Fixed in writeNameOnCalendar(); a nameless sign-up now
+ * shows "(signed up)" rather than taking the calendar down.)
+ *
  * CLEARING OUT DATES THAT HAVE GONE BY:
  * Nothing removes a date from the sign-up dropdown just because it
  * has passed — without this, someone could still pick last Thursday.
@@ -158,7 +178,7 @@
 // Bump this on every deploy, then run healthCheck() in both projects
 // to confirm they are running the same code. With copy/paste there is
 // nothing that can enforce that, so this is the next best thing.
-const SCRIPT_VERSION = '2026-09-22.1';
+const SCRIPT_VERSION = '2026-10-13.4';
 
 // ======== EDIT THESE ========
 const START_DATE = '2026-08-01';   // yyyy-mm-dd
@@ -203,7 +223,7 @@ const PAUSED_MESSAGE =
   '. Thank you for feeding the missionaries!';
 // ============================
 
-const Q_NAME = 'Your name';
+const Q_NAME = 'Name';            // must match the question title on the live form
 const Q_PHONE = 'Phone number';
 const Q_EMAIL = 'Email address (optional — for your confirmation + calendar invite)';
 
@@ -670,6 +690,414 @@ function describeFile(id) {
 }
 
 /**
+ * Works out which column of the roster holds the name and which holds
+ * the chosen date, by reading the header row rather than assuming
+ * positions. appendResponseRow() writes Timestamp/Name/Phone/Email/Date,
+ * but the real "Form Responses" tab's columns follow the FORM's
+ * question order — so adding or reordering a question shifts them, and
+ * a repair that guessed would copy names into the wrong days.
+ */
+function findRosterColumns(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = lastCol > 0
+    ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || ''))
+    : [];
+
+  let nameCol = 0;
+  let dateCol = 0;
+  headers.forEach((header, i) => {
+    const col = i + 1;
+    if (!nameCol && /name/i.test(header)) nameCol = col;
+    if (!dateCol && /date/i.test(header)) dateCol = col;
+  });
+
+  // Fall back to the order appendResponseRow() uses
+  return { name: nameCol || 2, date: dateCol || 5, headers: headers };
+}
+
+/**
+ * True for a date value out of a spreadsheet cell.
+ *
+ * Not `value instanceof Date`: that compares against whichever Date
+ * constructor happens to be in scope, so it answers false for a date
+ * that arrived from somewhere else — which is also what made this
+ * impossible to cover with a test. Object.prototype.toString does not
+ * care where the value came from.
+ */
+function isDateValue(value) {
+  return Object.prototype.toString.call(value) === '[object Date]' &&
+    !isNaN(value.getTime());
+}
+
+/**
+ * Turns a roster "Choose a date" cell into the dateLabel the rest of
+ * the script uses as a lookup key.
+ *
+ * Sheets sometimes stores "Saturday, August 29, 2026" as a real date
+ * value rather than text, and then getValue() hands back a Date whose
+ * toString is "Sat Aug 29 2026 00:00:00 GMT-0500 (...)" — which
+ * matches no SCHEDULE_MAP key and which parseDateLabel() cannot read.
+ * Same hazard monthTitleToKey() already guards against for the month
+ * title cells.
+ */
+function rosterDateLabel(value) {
+  if (isDateValue(value)) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'EEEE, MMMM d, yyyy');
+  }
+  return String(value || '').trim();
+}
+
+/**
+ * The placeholder texts a day-square shows when nobody's name is on
+ * it. Anything else is a real name, and a real name is never
+ * overwritten by the repair.
+ */
+function squareHasNoName(square) {
+  const nameLine = String(square).split('\n').slice(1).join(' ').trim();
+  return nameLine === '' ||
+    nameLine === '— available —' ||
+    nameLine === '(past)' ||
+    nameLine === '(signed up)' ||
+    nameLine === '(no meal needed)';
+}
+
+/**
+ * Finds sign-ups that are in the responses roster but missing from the
+ * calendar — the wreckage left by claimDate() throwing part-way, which
+ * is what the "Illegal argument" bug did on every sign-up where the
+ * name came through blank.
+ *
+ * ONLY TODAY ONWARD. Rows for days that have already gone by are left
+ * alone, on purpose:
+ *  - their squares have usually been greyed to "(past)" by now, and
+ *    putting a name back would undo that
+ *  - months taken off the sheet with removeOldMonths() are not in
+ *    SCHEDULE_MAP any more, and nobody wants a finished month
+ *    reinstated just to fill in a square
+ * The count of skipped rows is reported rather than hidden, so it is
+ * clear that they were seen and passed over.
+ *
+ * Shared by previewCalendarRepair() and repairCalendar() so the dry
+ * run cannot disagree with what the repair actually does.
+ */
+function findCalendarGaps() {
+  const props = PropertiesService.getScriptProperties();
+  const scheduleId = props.getProperty('SCHEDULE_ID');
+  const responsesId = props.getProperty('RESPONSES_ID');
+  const mapJson = props.getProperty('SCHEDULE_MAP');
+  if (!scheduleId || !responsesId || !mapJson) {
+    throw new Error('Missing SCHEDULE_ID / RESPONSES_ID / SCHEDULE_MAP — nothing to repair against.');
+  }
+
+  const dateMap = JSON.parse(mapJson);
+  const sheet = SpreadsheetApp.openById(scheduleId).getSheetByName('Schedule');
+  if (!sheet) {
+    throw new Error('The schedule spreadsheet has no tab named "Schedule".');
+  }
+
+  const roster = getFormResponsesSheet(SpreadsheetApp.openById(responsesId));
+  if (!roster) throw new Error('Could not find the responses roster tab.');
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const cols = findRosterColumns(roster);
+  const lastRow = roster.getLastRow();
+  const gaps = [];
+  const unmapped = [];
+  const mismatches = [];
+  let alreadyFine = 0;
+  let skippedPast = 0;
+
+  for (let row = 2; row <= lastRow; row++) {
+    const name = String(roster.getRange(row, cols.name).getValue() || '').trim();
+    const label = rosterDateLabel(roster.getRange(row, cols.date).getValue());
+    if (!label) continue;
+
+    // Nothing before today gets touched. A label that will not parse is
+    // kept rather than dropped, same as openFutureChoices() does —
+    // better to report something we do not understand than lose it.
+    const when = parseDateLabel(label);
+    if (when && when < today) {
+      skippedPast++;
+      continue;
+    }
+
+    const ref = dateMap[label];
+    if (!ref) {
+      unmapped.push({ row: row, name: name, label: label });
+      continue;
+    }
+
+    const square = String(sheet.getRange(ref.row, ref.col).getValue() || '');
+    const shownName = square.split('\n').slice(1).join(' ').trim();
+
+    if (name && shownName.indexOf(name) !== -1) {
+      alreadyFine++;           // already showing this person
+    } else if (squareHasNoName(square)) {
+      gaps.push({ row: row, name: name, label: label, ref: ref, square: square });
+    } else {
+      // The square carries a name, but not the one in the roster —
+      // usually because somebody typed the correct spelling onto the
+      // calendar by hand. Overwriting that with the raw roster value
+      // would undo their fix, so report it and leave it alone.
+      mismatches.push({ row: row, name: name, label: label, shown: shownName });
+    }
+  }
+
+  return {
+    gaps: gaps, unmapped: unmapped, mismatches: mismatches, alreadyFine: alreadyFine,
+    skippedPast: skippedPast, today: today, columns: cols, sheet: sheet
+  };
+}
+
+/**
+ * DRY RUN for repairCalendar() — lists the sign-ups it would put back
+ * on the calendar, and changes nothing.
+ */
+function previewCalendarRepair() {
+  const state = findCalendarGaps();
+
+  Logger.log('DRY RUN — nothing is being changed.');
+  Logger.log('Reading the name from roster column ' + state.columns.name +
+    ' and the date from column ' + state.columns.date +
+    ' (headers: ' + state.columns.headers.join(' | ') + ')');
+  Logger.log('Only looking at ' +
+    Utilities.formatDate(state.today, Session.getScriptTimeZone(), 'EEEE, MMMM d, yyyy') +
+    ' onward.' + (state.skippedPast > 0
+      ? ' Skipped ' + state.skippedPast + ' sign-up(s) for days that have already gone by.'
+      : ''));
+  Logger.log(state.alreadyFine + ' upcoming sign-up(s) are already showing correctly on the calendar.');
+
+  if (state.gaps.length === 0) {
+    Logger.log('NOTHING TO REPAIR — every sign-up in the roster is on the calendar.');
+  } else {
+    Logger.log('WOULD PUT BACK ' + state.gaps.length + ' sign-up(s):');
+    state.gaps.forEach(g => Logger.log('   ' + g.label + '  ->  "' +
+      (g.name || '(the roster has no name either)') + '"   (square now reads ' +
+      JSON.stringify(g.square) + ')'));
+  }
+
+  if (state.mismatches.length > 0) {
+    Logger.log('WOULD LEAVE ALONE ' + state.mismatches.length + ' square(s) that already have a ' +
+      'different name on them — check these by hand, the calendar wins:');
+    state.mismatches.forEach(m => Logger.log('   ' + m.label + ': calendar says "' + m.shown +
+      '", roster row ' + m.row + ' says "' + m.name + '"'));
+  }
+
+  if (state.unmapped.length > 0) {
+    Logger.log('CANNOT REPAIR ' + state.unmapped.length + ' upcoming sign-up(s) — those dates are ' +
+      'not on the calendar at all, so run extendSignupForm() for that month first:');
+    state.unmapped.forEach(u => Logger.log('   row ' + u.row + ': ' + u.name + ' -> "' + u.label + '"'));
+  }
+
+  Logger.log('Run repairCalendar() to apply this.');
+}
+
+/**
+ * Puts upcoming sign-ups that are in the roster but missing from the
+ * calendar back onto it, using the names Google recorded in the
+ * responses sheet. Days that have already gone by are left exactly as
+ * they are — see findCalendarGaps().
+ *
+ * It writes the calendar squares only. It does NOT put the dates back
+ * on the form, because a sign-up in the roster means the date is
+ * genuinely taken — and in the "Illegal argument" case claimDate() had
+ * already removed it before it threw. Any such date still being
+ * offered is reported and removed, since that would be a double
+ * booking waiting to happen.
+ *
+ * Run previewCalendarRepair() first.
+ */
+function repairCalendar() {
+  const state = findCalendarGaps();
+
+  if (state.skippedPast > 0) {
+    Logger.log('Left alone: ' + state.skippedPast + ' sign-up(s) for days that have already ' +
+      'gone by. Only today onward is repaired.');
+  }
+
+  if (state.gaps.length === 0) {
+    Logger.log('Nothing to repair — every sign-up in the roster is already on the calendar.');
+  } else {
+    state.gaps.forEach(g => {
+      writeNameOnCalendar(state.sheet, g.ref, g.name);
+      Logger.log('Put back: ' + g.label + '  ->  ' + (g.name || '(signed up)'));
+    });
+    Logger.log('Repaired ' + state.gaps.length + ' calendar square(s).');
+  }
+
+  // A taken date that is somehow still on the form is a double booking
+  // waiting to happen, so close that off while we are here.
+  const formId = PropertiesService.getScriptProperties().getProperty('FORM_ID');
+  if (formId && state.gaps.length > 0) {
+    const listItem = FormApp.openById(formId).getItems(FormApp.ItemType.LIST)[0].asListItem();
+    const offered = listItem.getChoices().map(c => c.getValue());
+    const takenButOffered = state.gaps
+      .map(g => g.label)
+      .filter(label => offered.indexOf(label) !== -1);
+
+    if (takenButOffered.length > 0) {
+      const kept = offered.filter(v => takenButOffered.indexOf(v) === -1);
+      listItem.setChoiceValues(kept.length > 0 ? kept : [ALL_FILLED_CHOICE]);
+      Logger.log('Also took ' + takenButOffered.length + ' already-taken date(s) back off the form: ' +
+        takenButOffered.join('; '));
+    }
+  }
+
+  if (state.mismatches.length > 0) {
+    Logger.log('LEFT ALONE: ' + state.mismatches.length + ' square(s) already have a different ' +
+      'name on them, so nothing was overwritten. Worth a look by hand:');
+    state.mismatches.forEach(m => Logger.log('   ' + m.label + ': calendar says "' + m.shown +
+      '", roster row ' + m.row + ' says "' + m.name + '"'));
+  }
+
+  if (state.unmapped.length > 0) {
+    Logger.log('STILL BROKEN: ' + state.unmapped.length + ' upcoming sign-up(s) are for dates that ' +
+      'are not on the calendar at all. Run extendSignupForm() for that month, then repairCalendar() again.');
+    state.unmapped.forEach(u => Logger.log('   row ' + u.row + ': ' + u.name + ' -> "' + u.label + '"'));
+  }
+}
+
+/**
+ * Read-only diagnosis of "people signed up but nothing appeared on the
+ * calendar". Changes NOTHING — it only reads and logs.
+ *
+ * The thing it is really checking: every date on the form's dropdown
+ * has to exist as a key in SCHEDULE_MAP, which is what claimDate()
+ * looks up to find the right calendar square. A date that is on the
+ * form but not in that map (a month opened up by editing the Google
+ * Form by hand instead of running extendSignupForm(), say) is accepted
+ * by Google into "Form Responses 1" and then goes nowhere, because
+ * claimDate() bails out before it touches the dropdown or the sheet.
+ *
+ * Deliberately written to depend on nothing but the core Google
+ * services, so it can be pasted into an older copy of this script and
+ * still run.
+ */
+function diagnoseSignups() {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+
+  Logger.log('===== SIGN-UP DIAGNOSIS (read-only) =====');
+  Logger.log('Script version: ' +
+    (typeof SCRIPT_VERSION === 'undefined' ? '(older copy, no version constant)' : SCRIPT_VERSION));
+  Logger.log('Properties present: ' + Object.keys(all).sort().join(', '));
+
+  const dateMap = all.SCHEDULE_MAP ? JSON.parse(all.SCHEDULE_MAP) : null;
+  Logger.log('SCHEDULE_MAP holds ' + (dateMap ? Object.keys(dateMap).length : 0) + ' dates.');
+  Logger.log('Months recorded as added: ' + (all.ADDED_MONTHS || '(none)'));
+
+  // --- 1. Triggers: is anything listening to the form at all?
+  const handlers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction()).sort();
+  Logger.log('--- TRIGGERS (' + handlers.length + ') ---');
+  Logger.log(handlers.join(', ') || 'NONE AT ALL');
+  if (handlers.indexOf('onSignup') === -1) {
+    Logger.log('>>> onSignup IS MISSING. Nothing runs when somebody signs up. This is the problem.');
+  }
+
+  // --- 2. The form: which one, and what is on its dropdown?
+  if (!all.FORM_ID) {
+    Logger.log('>>> No FORM_ID recorded — this project is not attached to a form.');
+    return;
+  }
+  const form = FormApp.openById(all.FORM_ID);
+  Logger.log('--- FORM ---');
+  Logger.log('Title: ' + form.getTitle());
+  Logger.log('Live link: ' + form.getPublishedUrl());
+  Logger.log('Accepting responses: ' + form.isAcceptingResponses());
+
+  const listItems = form.getItems(FormApp.ItemType.LIST);
+  if (listItems.length === 0) {
+    Logger.log('>>> The form has no dropdown question at all.');
+    return;
+  }
+  if (listItems.length > 1) {
+    Logger.log('>>> The form has ' + listItems.length + ' dropdown questions. The script only ' +
+      'ever uses the FIRST one, so a second one would be ignored.');
+  }
+  const choices = listItems[0].asListItem().getChoices().map(c => c.getValue());
+  Logger.log('Dropdown has ' + choices.length + ' option(s).');
+
+  // --- 3. THE KEY CHECK: is each offered date actually on the calendar?
+  Logger.log('--- CAN EACH OFFERED DATE BE CLAIMED? ---');
+  let orphans = 0;
+  choices.forEach(choice => {
+    if (choice === '(All dates are filled)') return;
+    const known = dateMap && dateMap[String(choice).trim()];
+    if (!known) {
+      orphans++;
+      Logger.log('  NOT ON THE CALENDAR: "' + choice + '"');
+    }
+  });
+  Logger.log(orphans === 0
+    ? '  All offered dates are on the calendar — the dropdown is fine.'
+    : '>>> ' + orphans + ' date(s) are offered on the form but are NOT in SCHEDULE_MAP. ' +
+      'Anyone picking one of those gets recorded in Form Responses 1 and nothing else happens.');
+
+  // --- 4. The schedule spreadsheet: right file, right tab?
+  Logger.log('--- SCHEDULE SPREADSHEET ---');
+  if (!all.SCHEDULE_ID) {
+    Logger.log('>>> No SCHEDULE_ID recorded.');
+  } else {
+    try {
+      const ss = SpreadsheetApp.openById(all.SCHEDULE_ID);
+      const tabs = ss.getSheets().map(sh => sh.getName());
+      Logger.log('File: ' + ss.getName());
+      Logger.log('Link: ' + ss.getUrl());
+      Logger.log('Tabs: ' + tabs.join(', '));
+      if (tabs.indexOf('Schedule') === -1) {
+        Logger.log('>>> There is no tab named exactly "Schedule". The script looks for that ' +
+          'name and cannot write a name onto the calendar without it.');
+      }
+    } catch (err) {
+      Logger.log('>>> Could not open the schedule spreadsheet: ' + err);
+    }
+  }
+
+  // --- 5. The actual sign-ups, and where each one stands
+  Logger.log('--- THE SIGN-UPS THEMSELVES ---');
+  if (!all.RESPONSES_ID) {
+    Logger.log('(No RESPONSES_ID recorded, so skipping.)');
+    Logger.log('===== END OF DIAGNOSIS =====');
+    return;
+  }
+  try {
+    const responsesSs = SpreadsheetApp.openById(all.RESPONSES_ID);
+    const sheet = responsesSs.getSheets()
+      .filter(sh => sh.getName() !== 'Quick Add' && sh.getName() !== 'Quick Cancel')[0];
+    const lastRow = sheet.getLastRow();
+    Logger.log('Roster tab "' + sheet.getName() + '" has ' + Math.max(lastRow - 1, 0) + ' row(s).');
+
+    const first = Math.max(2, lastRow - 19); // last 20 at most
+    for (let row = first; row <= lastRow; row++) {
+      const values = sheet.getRange(row, 1, 1, 5).getValues()[0];
+      const name = values[1];
+      const chosen = String(values[4] || '').trim();
+      if (!chosen) continue;
+
+      const ref = dateMap && dateMap[chosen];
+      if (!ref) {
+        Logger.log('  row ' + row + ': ' + name + ' -> "' + chosen +
+          '"  NOT IN SCHEDULE_MAP, so it could never reach the calendar');
+        continue;
+      }
+      const sq = SpreadsheetApp.openById(all.SCHEDULE_ID)
+        .getSheetByName('Schedule').getRange(ref.row, ref.col).getValue();
+      const onCalendar = String(sq).indexOf(String(name)) !== -1;
+      Logger.log('  row ' + row + ': ' + name + ' -> ' + chosen +
+        '  square says ' + JSON.stringify(String(sq)) +
+        (onCalendar ? '  OK' : '  <-- name is NOT there'));
+    }
+  } catch (err) {
+    Logger.log('>>> Could not read the responses spreadsheet: ' + err);
+  }
+
+  Logger.log('===== END OF DIAGNOSIS =====');
+  Logger.log('Nothing above was changed. Send this whole log over.');
+}
+
+/**
  * Dumps every script property as JSON, and changes nothing.
  *
  * Run this in the live project and keep the output BEFORE any change
@@ -1014,7 +1442,7 @@ function findMonthBlocks(sheet) {
  * parse "August 2026" as one.
  */
 function monthTitleToKey(value) {
-  if (value instanceof Date) {
+  if (isDateValue(value)) {
     return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM');
   }
   const parts = String(value).trim().split(/\s+/);
@@ -1285,7 +1713,14 @@ function onSignup(e) {
   const chosenDate = responses
     .find(r => r.getItem().getId() === listItem.getId())
     .getResponse();
-  const name = findResponse(responses, Q_NAME);
+  const name = findNameResponse(responses);
+  if (!name) {
+    // The date is still claimed below — losing the name must not cost
+    // somebody their slot — but this needs fixing on the form.
+    console.error('A sign-up for "' + chosenDate + '" arrived with no name. Check that the ' +
+      'form still has a question called "' + Q_NAME + '" and that it is required. ' +
+      'The calendar will show "(signed up)" until the name is corrected.');
+  }
   const email = findEmailResponse(responses);
 
   const error = claimDate(form, chosenDate, name, email);
@@ -1448,21 +1883,7 @@ function claimDate(form, dateLabel, name, email) {
 
   // 2) Write the name into the right day-square on the public calendar
   const sheet = SpreadsheetApp.openById(scheduleId).getSheetByName('Schedule');
-  const cell = sheet.getRange(cellRef.row, cellRef.col);
-  // Cell text is "day number\nstatus" — keep the day number, replace
-  // only the status/name line so the square still looks right.
-  const dayNumber = cell.getValue().toString().split('\n')[0];
-  const cellText = dayNumber + '\n' + name;
-
-  // Bold just the name line, then mark the square green so filled
-  // days stand out on the calendar at a glance.
-  const richText = SpreadsheetApp.newRichTextValue()
-    .setText(cellText)
-    .setTextStyle(dayNumber.length + 1, cellText.length,
-      SpreadsheetApp.newTextStyle().setBold(true).build())
-    .build();
-  cell.setRichTextValue(richText);
-  cell.setBackground('#93c47d');
+  writeNameOnCalendar(sheet, cellRef, name);
 
   // 3) Email the signer a confirmation + calendar invite, if given one
   // — the email question is optional, and "Quick Add" rows often skip it
@@ -1470,6 +1891,39 @@ function claimDate(form, dateLabel, name, email) {
   if (address) sendConfirmationEmail(address, name, dateLabel, cellRef.iso);
 
   return null;
+}
+
+/**
+ * Writes a name into one calendar square and marks it taken. Shared by
+ * claimDate() (a live sign-up) and repairCalendar() (filling in one
+ * that got lost), so the two can't drift apart.
+ *
+ * Cell text is "day number\nname" — the day number is kept and only
+ * the line under it is replaced, so the square still looks right.
+ *
+ * The bold range is applied ONLY when there is something to bold.
+ * Google rejects a zero-length range with "Illegal argument", and that
+ * is exactly what brought the live calendar down: a blank name made
+ * the start and end offsets equal, claimDate() threw after it had
+ * already taken the date off the form, and the sign-up ended up
+ * recorded in the responses sheet and nowhere else.
+ */
+function writeNameOnCalendar(sheet, cellRef, name) {
+  const cell = sheet.getRange(cellRef.row, cellRef.col);
+  const dayNumber = cell.getValue().toString().split('\n')[0];
+  // Never leave the square blank: the public calendar still needs to
+  // show that the day is taken, even if the name went missing.
+  const shown = String(name || '').trim() || '(signed up)';
+  const cellText = dayNumber + '\n' + shown;
+  const start = dayNumber.length + 1;
+
+  const richText = SpreadsheetApp.newRichTextValue().setText(cellText);
+  if (cellText.length > start) {
+    richText.setTextStyle(start, cellText.length,
+      SpreadsheetApp.newTextStyle().setBold(true).build());
+  }
+  cell.setRichTextValue(richText.build());
+  cell.setBackground('#93c47d');
 }
 
 /** Looks up the dateLabel (e.g. 'Tuesday, September 1, 2026') whose iso date matches isoDate, or null if none does. */
@@ -1524,6 +1978,24 @@ function setupQuickCancelSheet(responsesSs) {
 function findResponse(responses, title) {
   const match = responses.find(r => r.getItem().getTitle() === title);
   return match ? match.getResponse() : '';
+}
+
+/**
+ * Pulls the name out of a submission. Tries the exact Q_NAME title
+ * first, then falls back to any question mentioning "name".
+ *
+ * The fallback exists because the live form's question was titled
+ * "Name" while Q_NAME said "Your name", so the exact lookup found
+ * nothing and every sign-up came through nameless — which then threw
+ * in writeNameOnCalendar() and cost the calendar a month of entries.
+ * Q_NAME now matches the form, so the fallback is a safety net rather
+ * than the thing doing the work.
+ */
+function findNameResponse(responses) {
+  const exact = String(findResponse(responses, Q_NAME) || '').trim();
+  if (exact) return exact;
+  const match = responses.find(r => /name/i.test(r.getItem().getTitle()));
+  return match ? String(match.getResponse()).trim() : '';
 }
 
 /**

@@ -132,11 +132,31 @@ git add -A && git commit -m "... (v2026-09-22.1)"
 
 ## If something looks wrong on the live calendar
 
+All read-only, in this order:
+
 1. `healthCheck()` — is anything missing or unexpected?
-2. `previewOldDates()` — read-only, says what is stale.
-3. `exportScriptProperties()` — compare `SCHEDULE_MAP` with your last backup.
-4. To restore: **Project Settings → Script Properties**, paste the saved
-   value back into the property it came from.
+2. `diagnoseSignups()` — for "they signed up but the calendar is blank".
+   Names the cause: missing `onSignup` trigger, dates offered that were
+   never drawn on the calendar, a renamed `Schedule` tab, or names that
+   never got written. It also prints the roster's column headers, which
+   is how you spot a form question having been renamed.
+3. `previewOldDates()` — says what is stale.
+4. `exportScriptProperties()` — compare `SCHEDULE_MAP` with your last backup.
+
+Then to fix:
+
+- **names missing from the calendar** → `previewCalendarRepair()`, then
+  `repairCalendar()`. It reads the names out of the responses sheet, so
+  nothing has to be retyped.
+- **a corrupted `SCHEDULE_MAP`** → **Project Settings → Script
+  Properties**, paste the saved value back into the property it came from.
+
+### Remember the execution log
+
+`onSignup()` reports a failed sign-up with `console.error` and nothing
+else, so a broken sign-up is silent unless you look. The **Executions**
+page in the left sidebar is the first place to check, and the stack
+trace's line numbers tell you which version is actually deployed.
 
 ---
 
