@@ -262,7 +262,7 @@ person up.
 | Add more days for someone already set up | Keep their `PERSON_NAME`; set new `START_DATE`/`END_DATE` | `extendSignupForm` |
 | Reopen a date someone cancelled | `PERSON_NAME`, and `CANCEL_DATE` set to that date | `cancelSignup` |
 | See everyone set up, with their links | nothing | `listPeople` |
-| Stop tracking someone | `PERSON_NAME` | `forgetPerson` |
+| Wrap up once someone's meals are done | `PERSON_NAME` | `forgetPerson` |
 
 Adding more days with `extendSignupForm` keeps the same links, so you
 don't need to resend anything.
@@ -271,8 +271,12 @@ You can't break anything by running `createSignupForm` again for a name
 that's already set up. It won't overwrite anything; it just shows that
 person's existing link.
 
-`forgetPerson` doesn't delete their files. If you want those gone too,
-delete their folder in Google Drive yourself.
+**Run `forgetPerson` once a person's meals are over.** One setup can
+handle about 10 people at a time, and `forgetPerson` frees up that
+person's spot. After it runs, their form and schedule stop updating, so
+don't run it while anyone might still sign up. It doesn't delete their
+files: their schedule stays in Drive as a record. If you want the files
+gone too, delete their folder in Google Drive yourself.
 
 ### Optional: let a meals coordinator set up sign-ups without the script
 
@@ -312,7 +316,8 @@ after a real submission, run **`reinstallAdminTrigger`** and try again.
 | **"Authorization required"** appears again | That's normal after Step 3, or after pasting a new version of the script. Approve it again (Step 5). |
 | **Dates are off by a day** | Check the time zone in **Project Settings** (Step 3). |
 | **A volunteer didn't get a confirmation email** | They may have mistyped their email address, or it went to spam. Their sign-up still counts: check the Schedule. |
-| **"This script has too many triggers"** | Google allows about 10 people per project, counting people you're finished with. For now, ask whoever shared this script with you for help. |
+| **"…running as many sign-ups as Google allows"** | About 10 people are set up at once, which is Google's limit. Run `listPeople`, pick someone whose meals are over, set `PERSON_NAME` to their name, and run `forgetPerson`. Then set `PERSON_NAME` back to the new person and try again. |
+| **"No one called … is set up"** when running `forgetPerson` | The name doesn't exactly match. Run `listPeople` and copy the name from there. |
 
 The comments at the top of the script describe every feature in more
 detail.

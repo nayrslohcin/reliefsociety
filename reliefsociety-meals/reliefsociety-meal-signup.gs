@@ -334,6 +334,14 @@ function createSignupForCore(config) {
     clearPersonProps(props, personKey);
   }
 
+  // Each person needs two triggers and Apps Script allows 20 per
+  // project. Check before creating any files: running out part-way
+  // would leave a half-set-up person whose form never updates.
+  if (ScriptApp.getProjectTriggers().length + 2 > 20) {
+    throw new Error('This project is already running as many sign-ups as Google allows (about 10). ' +
+      'Run listPeople(), then run forgetPerson() for someone whose meals are over, and try again.');
+  }
+
   const formTitle = (config.formTitle && String(config.formTitle).trim()) ||
     (WARD_NAME + ' Meal Sign-Up for ' + personName);
   const description = (config.description && String(config.description).trim()) ||
@@ -957,15 +965,23 @@ function listPeople() {
  * already detects a deleted (or Trashed) form and clears the stale
  * record on its own. Use this instead when you want a clean slate
  * WITHOUT deleting their Drive files yet (e.g. to stop the script
- * tracking them while you archive their folder manually later). Set
- * PERSON_NAME above to match, then run this. Does nothing to any
- * other person's data.
+ * tracking them while you archive their folder manually later), and
+ * when their meals are over — it removes their two triggers, which
+ * frees room for more people under Apps Script's 20-trigger limit.
+ * Their form stops updating itself after this, so only run it once
+ * nobody needs their sign-up anymore. Set PERSON_NAME above to match,
+ * then run this. Does nothing to any other person's data.
  */
 function forgetPerson() {
   const personKey = sanitizePersonKey(PERSON_NAME);
   const props = PropertiesService.getScriptProperties();
+  if (!getProp(props, personKey, 'FORM_ID')) {
+    Logger.log('No one called "' + PERSON_NAME + '" is set up — nothing to forget. Run listPeople() to see the exact names.');
+    return;
+  }
   clearPersonProps(props, personKey);
-  Logger.log('Forgot "' + PERSON_NAME + '" — this script no longer tracks a form/schedule for them. ' +
+  Logger.log('Forgot "' + PERSON_NAME + '" — this script no longer tracks a form/schedule for them, ' +
+    'and their sign-up form no longer updates itself. ' +
     'Their Drive files (if any remain) were not touched.');
 }
 
@@ -976,10 +992,21 @@ function forgetPerson() {
  * touching any Drive file. Shared by forgetPerson() (explicit,
  * user-requested) and createSignupForm()'s stale-record recovery
  * (automatic, only once the referenced form has been confirmed gone).
+ *
+ * Also deletes that person's two triggers (onSignup on their form,
+ * onResponsesEdit on their responses sheet), matched by source file ID
+ * so nobody else's are touched. Apps Script allows only 20 triggers
+ * per project, and each person adds two, so without this a project
+ * stops being able to set anyone up after about ten people.
  */
 function clearPersonProps(props, personKey) {
   const formId = getProp(props, personKey, 'FORM_ID');
   const ssId = getProp(props, personKey, 'RESPONSES_ID');
+
+  const sourceIds = [formId, ssId].filter(id => id);
+  ScriptApp.getProjectTriggers()
+    .filter(t => sourceIds.indexOf(t.getTriggerSourceId()) !== -1)
+    .forEach(t => ScriptApp.deleteTrigger(t));
 
   ['DISPLAY_NAME', 'FORM_TITLE', 'FOLDER_ID', 'SCHEDULE_ID', 'FORM_ID', 'RESPONSES_ID', 'SCHEDULE_MAP', 'ADDED_MONTHS']
     .forEach(base => props.deleteProperty('p:' + personKey + ':' + base));
