@@ -334,6 +334,14 @@ function createSignupForCore(config) {
     clearPersonProps(props, personKey);
   }
 
+  // Each person needs two triggers and Apps Script allows 20 per
+  // project. Check before creating any files: running out part-way
+  // would leave a half-set-up person whose form never updates.
+  if (ScriptApp.getProjectTriggers().length + 2 > 20) {
+    throw new Error('This project is already running as many sign-ups as Google allows (about 10). ' +
+      'Run listPeople(), then run forgetPerson() for someone whose meals are over, and try again.');
+  }
+
   const formTitle = (config.formTitle && String(config.formTitle).trim()) ||
     (WARD_NAME + ' Meal Sign-Up for ' + personName);
   const description = (config.description && String(config.description).trim()) ||
@@ -941,11 +949,19 @@ function listPeople() {
     Logger.log('No one has been set up yet — set PERSON_NAME and run createSignupForm().');
     return;
   }
+  // openById() throws for a file deleted from Drive; one person's
+  // deleted folder must not stop everyone else's links being listed.
+  const urlOf = (id, open) => {
+    if (!id) return '(missing)';
+    try {
+      return open(id);
+    } catch (err) {
+      return '(deleted from Drive)';
+    }
+  };
   list.forEach(p => {
-    const formId = getProp(props, p.key, 'FORM_ID');
-    const scheduleId = getProp(props, p.key, 'SCHEDULE_ID');
-    const formUrl = formId ? FormApp.openById(formId).getPublishedUrl() : '(missing)';
-    const scheduleUrl = scheduleId ? SpreadsheetApp.openById(scheduleId).getUrl() : '(missing)';
+    const formUrl = urlOf(getProp(props, p.key, 'FORM_ID'), id => FormApp.openById(id).getPublishedUrl());
+    const scheduleUrl = urlOf(getProp(props, p.key, 'SCHEDULE_ID'), id => SpreadsheetApp.openById(id).getUrl());
     Logger.log(p.name + '\n  Sign-up:  ' + formUrl + '\n  Schedule: ' + scheduleUrl);
   });
 }
@@ -957,15 +973,23 @@ function listPeople() {
  * already detects a deleted (or Trashed) form and clears the stale
  * record on its own. Use this instead when you want a clean slate
  * WITHOUT deleting their Drive files yet (e.g. to stop the script
- * tracking them while you archive their folder manually later). Set
- * PERSON_NAME above to match, then run this. Does nothing to any
- * other person's data.
+ * tracking them while you archive their folder manually later), and
+ * when their meals are over — it removes their two triggers, which
+ * frees room for more people under Apps Script's 20-trigger limit.
+ * Their form stops updating itself after this, so only run it once
+ * nobody needs their sign-up anymore. Set PERSON_NAME above to match,
+ * then run this. Does nothing to any other person's data.
  */
 function forgetPerson() {
   const personKey = sanitizePersonKey(PERSON_NAME);
   const props = PropertiesService.getScriptProperties();
+  if (!getProp(props, personKey, 'FORM_ID')) {
+    Logger.log('No one called "' + PERSON_NAME + '" is set up — nothing to forget. Run listPeople() to see the exact names.');
+    return;
+  }
   clearPersonProps(props, personKey);
-  Logger.log('Forgot "' + PERSON_NAME + '" — this script no longer tracks a form/schedule for them. ' +
+  Logger.log('Forgot "' + PERSON_NAME + '" — this script no longer tracks a form/schedule for them, ' +
+    'and their sign-up form no longer updates itself. ' +
     'Their Drive files (if any remain) were not touched.');
 }
 
@@ -976,10 +1000,21 @@ function forgetPerson() {
  * touching any Drive file. Shared by forgetPerson() (explicit,
  * user-requested) and createSignupForm()'s stale-record recovery
  * (automatic, only once the referenced form has been confirmed gone).
+ *
+ * Also deletes that person's two triggers (onSignup on their form,
+ * onResponsesEdit on their responses sheet), matched by source file ID
+ * so nobody else's are touched. Apps Script allows only 20 triggers
+ * per project, and each person adds two, so without this a project
+ * stops being able to set anyone up after about ten people.
  */
 function clearPersonProps(props, personKey) {
   const formId = getProp(props, personKey, 'FORM_ID');
   const ssId = getProp(props, personKey, 'RESPONSES_ID');
+
+  const sourceIds = [formId, ssId].filter(id => id);
+  ScriptApp.getProjectTriggers()
+    .filter(t => sourceIds.indexOf(t.getTriggerSourceId()) !== -1)
+    .forEach(t => ScriptApp.deleteTrigger(t));
 
   ['DISPLAY_NAME', 'FORM_TITLE', 'FOLDER_ID', 'SCHEDULE_ID', 'FORM_ID', 'RESPONSES_ID', 'SCHEDULE_MAP', 'ADDED_MONTHS']
     .forEach(base => props.deleteProperty('p:' + personKey + ':' + base));
@@ -1419,7 +1454,12 @@ function claimDate(props, personKey, form, dateLabel, name, email) {
   // Cell text is "day number\nstatus" — keep the day number, replace
   // only the status/name line so the square still looks right.
   const dayNumber = cell.getValue().toString().split('\n')[0];
-  const cellText = dayNumber + '\n' + name;
+  // Never write a blank name: the date has already left the dropdown
+  // above, and an empty name line makes setTextStyle() below throw, so
+  // the day would vanish from both the form and the schedule. That
+  // happens when the name question gets renamed in the Forms editor.
+  const shownName = String(name || '').trim() || '(signed up)';
+  const cellText = dayNumber + '\n' + shownName;
 
   // Bold just the name line, then mark the square green so filled
   // days stand out on the calendar at a glance.
@@ -1432,7 +1472,9 @@ function claimDate(props, personKey, form, dateLabel, name, email) {
   cell.setBackground('#93c47d');
 
   // 3) Email the signer a confirmation + calendar invite, if given one
-  if (email) sendConfirmationEmail(props, personKey, email, name, dateLabel, cellRef.iso);
+  // (a Quick Add row's Email cell can hold just a stray space)
+  const address = String(email || '').trim();
+  if (address) sendConfirmationEmail(props, personKey, address, shownName, dateLabel, cellRef.iso);
 
   return null;
 }
