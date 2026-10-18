@@ -679,15 +679,20 @@ function parseExcludeDatesText(text) {
  * own data; every other person set up in this script is untouched.
  *
  * - Adds the new range's dates to the form's dropdown, keeping any
- *   still-open dates from before (minus ones now in the past)
+ *   still-open dates from before (minus ones now in the past), in
+ *   date order
  * - Re-opens the form if a previous batch of dates had filled it up
- * - Appends a new calendar block to the schedule sheet below the
- *   existing one(s) — past months are left in place as a record
- * - Refuses to add a calendar month that's already been added before
- *   for this person (tracked per-person in ADDED_MONTHS), so
- *   re-running it with the same/overlapping START_DATE/END_DATE is a
- *   harmless no-op instead of creating a duplicate block or
- *   re-opening claimed dates
+ * - For a month that's already on the schedule, turns the squares for
+ *   the newly added days into open ones in place (every day of a
+ *   drawn month already has a square, greyed out if it was outside
+ *   the range or excluded)
+ * - For a month that isn't on the schedule yet, appends a new
+ *   calendar block below the existing one(s) — past months are left
+ *   in place as a record
+ * - Only ever adds: a day already on the schedule (open, signed up
+ *   for, or past) is left exactly as it is, so re-running it with the
+ *   same/overlapping START_DATE/END_DATE is a harmless no-op and can
+ *   never reopen a claimed date
  *
  * Run createSignupForm() once first for this PERSON_NAME; after that,
  * just run this each time you want to open up more days for them.
@@ -704,35 +709,57 @@ function extendSignupForm() {
   const startDate = new Date(START_DATE + 'T00:00:00');
   const endDate = new Date(END_DATE + 'T00:00:00');
   const allBlocks = buildCalendarBlocks(startDate, endDate, EXCLUDE_DATES);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  // Drop any calendar month already added for this person on a
-  // previous run, so this function is safe to re-run with the same
-  // or overlapping dates
+  // Months already drawn on this person's schedule get their new days
+  // filled in where they are; only months not drawn yet get a new block
   const addedMonths = JSON.parse(getProp(props, personKey, 'ADDED_MONTHS') || '[]');
-  const skippedBlocks = allBlocks.filter(b => addedMonths.indexOf(b.key) !== -1);
+  const drawnBlocks = allBlocks.filter(b => addedMonths.indexOf(b.key) !== -1);
   const newBlocks = allBlocks.filter(b => addedMonths.indexOf(b.key) === -1);
 
-  if (skippedBlocks.length > 0) {
-    Logger.log('Already added, skipping: ' + skippedBlocks.map(b => b.label).join(', '));
-  }
-  if (newBlocks.length === 0) {
-    Logger.log('Nothing to do — every month in ' + START_DATE + ' to ' + END_DATE +
-      ' has already been added for ' + PERSON_NAME + '. Change START_DATE/END_DATE to a new range.');
+  const mapJson = getProp(props, personKey, 'SCHEDULE_MAP');
+  const dateMap = mapJson ? JSON.parse(mapJson) : {};
+  const scheduleSs = SpreadsheetApp.openById(scheduleId);
+  const sheet = scheduleSs.getSheetByName('Schedule') || scheduleSs.getActiveSheet();
+
+  const fillIns = findDaysToFillIn(sheet, drawnBlocks, dateMap, today);
+
+  if (newBlocks.length === 0 && fillIns.length === 0) {
+    Logger.log('Nothing to do — every day from ' + START_DATE + ' to ' + END_DATE +
+      ' is already on ' + PERSON_NAME + '\'s schedule (or has already passed). ' +
+      'Change START_DATE/END_DATE to the days you want to add.');
     return;
   }
 
+  // Turn each newly added day in an already-drawn month into an open square
+  fillIns.forEach(f => {
+    sheet.getRange(f.row, f.col)
+      .setValue(f.cell.day + '\n— available —')
+      .setBackground('#ffffff')
+      .setFontColor('#000000');
+    dateMap[f.cell.dateLabel] = { row: f.row, col: f.col, iso: f.cell.isoDate };
+  });
+
+  // Append the new month block(s) below whatever is already drawn
+  if (newBlocks.length > 0) {
+    const startRow = sheet.getLastRow() > 0 ? sheet.getLastRow() + 2 : 1;
+    Object.assign(dateMap, renderSchedule(scheduleSs, newBlocks, startRow));
+  }
+  setProp(props, personKey, 'SCHEDULE_MAP', JSON.stringify(dateMap));
+
+  // Grey out any square that's now in the past with nobody signed up
+  // for it, across this person's WHOLE schedule (not just the new
+  // days) — this is the natural moment to sweep, since it's when
+  // we're already touching the sheet and re-checking "today"
+  greyOutPastDates(sheet, dateMap, today);
+
+  // Dropdown: still-open, still-future choices from before (dropping
+  // the "all filled" placeholder), plus the new days from today on.
+  // Claimed dates were removed from the dropdown when claimed and are
+  // never in fillIns, so nothing claimed can come back.
   const form = FormApp.openById(formId);
-  const scheduleSs = SpreadsheetApp.openById(scheduleId);
-
-  // Re-open in case the last batch of dates filled up and the form
-  // auto-closed itself
-  form.setAcceptingResponses(true);
-
-  // Keep still-open, still-future choices from before; drop the
-  // "all filled" placeholder and anything now in the past
   const listItem = form.getItems(FormApp.ItemType.LIST)[0].asListItem();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
   const keptChoices = listItem.getChoices()
     .map(c => c.getValue())
     .filter(v => v !== '(All dates are filled)')
@@ -740,44 +767,77 @@ function extendSignupForm() {
       const d = parseDateLabel(v);
       return d && d >= today;
     });
-
-  // New dropdown choices come only from the NOT-already-added months,
-  // and only from today onward (in case START_DATE lands mid-month),
-  // so a duplicate/overlapping run can't reopen an already-claimed
-  // or already-past date
-  const newDates = newBlocks
-    .reduce((cells, block) => cells.concat(block.weeks.flat()), [])
-    .filter(cell => cell && cell.status === 'available' &&
-      new Date(cell.isoDate + 'T00:00:00') >= today)
+  const newDates = fillIns.map(f => f.cell)
+    .concat(newBlocks.reduce((cells, block) => cells.concat(block.weeks.flat()), [])
+      .filter(cell => cell && cell.status === 'available' &&
+        new Date(cell.isoDate + 'T00:00:00') >= today))
     .map(cell => cell.dateLabel);
   const merged = keptChoices.concat(newDates.filter(d => keptChoices.indexOf(d) === -1));
-  listItem.setChoiceValues(merged);
+  merged.sort((a, b) => parseDateLabel(a) - parseDateLabel(b));
 
-  // Append the new calendar block(s) below whatever is already drawn
-  const sheet = scheduleSs.getSheetByName('Schedule') || scheduleSs.getActiveSheet();
-  const startRow = sheet.getLastRow() > 0 ? sheet.getLastRow() + 2 : 1;
-  const newMap = renderSchedule(scheduleSs, newBlocks, startRow);
+  if (merged.length > 0) {
+    listItem.setChoiceValues(merged);
+    // Re-open in case the last batch of dates filled up and the form
+    // auto-closed itself
+    form.setAcceptingResponses(true);
+  }
 
-  // Merge the new date -> cell mapping into this person's existing
-  // one (keys are full dates, so old and new months never collide)
-  const mapJson = getProp(props, personKey, 'SCHEDULE_MAP');
-  const dateMap = mapJson ? JSON.parse(mapJson) : {};
-  Object.assign(dateMap, newMap);
-  setProp(props, personKey, 'SCHEDULE_MAP', JSON.stringify(dateMap));
-
-  // Grey out any square that's now in the past with nobody signed up
-  // for it, across this person's WHOLE schedule (not just the new
-  // block) — this is the natural moment to sweep, since it's when
-  // we're already touching the sheet and re-checking "today"
-  greyOutPastDates(sheet, dateMap, today);
-
-  // Remember these months as added so a future run can't duplicate them
+  // Remember the new months as drawn so a future run fills them in
+  // rather than drawing them twice
   setProp(props, personKey, 'ADDED_MONTHS',
     JSON.stringify(addedMonths.concat(newBlocks.map(b => b.key))));
 
-  Logger.log('Added for ' + PERSON_NAME + ': ' + newBlocks.map(b => b.label).join(', '));
+  const added = drawnBlocks
+    .map(b => ({ label: b.label, count: fillIns.filter(f => f.block === b).length }))
+    .filter(b => b.count > 0)
+    .map(b => b.label + ' (' + b.count + ' more day' + (b.count === 1 ? '' : 's') + ')')
+    .concat(newBlocks.map(b => b.label));
+  Logger.log('Added for ' + PERSON_NAME + ': ' + added.join(', '));
   Logger.log('SIGN-UP link (unchanged):\n' + form.getPublishedUrl());
   Logger.log('SCHEDULE link (unchanged):\n' + scheduleSs.getUrl());
+}
+
+/**
+ * For months already drawn on a person's schedule, finds the days the
+ * new range adds: available in the new range, not on the schedule yet
+ * (dateMap holds every day that ever was, signed up for or not), and
+ * not already past. Returns [{block, cell, row, col}] giving the
+ * square each one already has.
+ *
+ * The squares are found from the month's title row (the block label,
+ * e.g. "November 2026", in column A, which renderSchedule() writes and
+ * extendSignupForm() never draws twice). Below it come the weekday
+ * header and then one row per week, so a day's square is at
+ * title + 2 + its week number, in the column for its weekday. A month
+ * whose title can't be found (rows deleted by hand) is skipped with a
+ * note in the log rather than guessed at.
+ */
+function findDaysToFillIn(sheet, drawnBlocks, dateMap, today) {
+  if (drawnBlocks.length === 0) return [];
+  const lastRow = sheet.getLastRow();
+  const columnA = lastRow > 0 ? sheet.getRange(1, 1, lastRow, 1).getValues().map(r => r[0]) : [];
+
+  const fillIns = [];
+  drawnBlocks.forEach(block => {
+    const newDays = [];
+    block.weeks.forEach((week, w) => week.forEach((cell, c) => {
+      if (cell && cell.status === 'available' && !dateMap[cell.dateLabel] &&
+          new Date(cell.isoDate + 'T00:00:00') >= today) {
+        newDays.push({ cell, week: w, col: c + 1 });
+      }
+    }));
+    if (newDays.length === 0) return;
+
+    const titleIndex = columnA.indexOf(block.label);
+    if (titleIndex === -1) {
+      Logger.log('Could not find the "' + block.label + '" heading on the schedule, so its new days ' +
+        'were not added. Was that part of the sheet deleted?');
+      return;
+    }
+    const firstWeekRow = titleIndex + 1 + 2; // 1-based title row, then the weekday header
+    newDays.forEach(d => fillIns.push({ block, cell: d.cell, row: firstWeekRow + d.week, col: d.col }));
+  });
+  return fillIns;
 }
 
 /**
