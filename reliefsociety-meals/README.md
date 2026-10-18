@@ -265,7 +265,10 @@ person up.
 | Wrap up once someone's meals are done | `PERSON_NAME` | `forgetPerson` |
 
 Adding more days with `extendSignupForm` keeps the same links, so you
-don't need to resend anything.
+don't need to resend anything. For now it can only add **whole new
+months**: if November is already on someone's schedule, it can't add
+more November days. Plan the full range for the current month when you
+first set someone up.
 
 You can't break anything by running `createSignupForm` again for a name
 that's already set up. It won't overwrite anything; it just shows that
@@ -333,6 +336,22 @@ anything.
 
 Everyone you've already set up keeps working: their forms, schedules
 and links don't change.
+
+---
+
+## For developers: running the tests
+
+You don't need these to use the script. If you change the code, the
+tests in [`tests/`](tests/) run the real `.gs` file under
+[Node.js](https://nodejs.org) 22 or newer, with stand-ins for Google's
+services, so nothing touches a real Google account:
+
+```bash
+cd reliefsociety-meals
+npm test
+```
+
+There's nothing to install first.
 
 ---
 

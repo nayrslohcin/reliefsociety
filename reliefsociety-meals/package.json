@@ -1,0 +1,10 @@
+{
+  "name": "reliefsociety-meal-signup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Apps Script meal sign-up form, with tests that run the .gs file directly under Node.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  }
+}

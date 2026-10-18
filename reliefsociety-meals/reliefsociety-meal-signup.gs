@@ -949,11 +949,19 @@ function listPeople() {
     Logger.log('No one has been set up yet — set PERSON_NAME and run createSignupForm().');
     return;
   }
+  // openById() throws for a file deleted from Drive; one person's
+  // deleted folder must not stop everyone else's links being listed.
+  const urlOf = (id, open) => {
+    if (!id) return '(missing)';
+    try {
+      return open(id);
+    } catch (err) {
+      return '(deleted from Drive)';
+    }
+  };
   list.forEach(p => {
-    const formId = getProp(props, p.key, 'FORM_ID');
-    const scheduleId = getProp(props, p.key, 'SCHEDULE_ID');
-    const formUrl = formId ? FormApp.openById(formId).getPublishedUrl() : '(missing)';
-    const scheduleUrl = scheduleId ? SpreadsheetApp.openById(scheduleId).getUrl() : '(missing)';
+    const formUrl = urlOf(getProp(props, p.key, 'FORM_ID'), id => FormApp.openById(id).getPublishedUrl());
+    const scheduleUrl = urlOf(getProp(props, p.key, 'SCHEDULE_ID'), id => SpreadsheetApp.openById(id).getUrl());
     Logger.log(p.name + '\n  Sign-up:  ' + formUrl + '\n  Schedule: ' + scheduleUrl);
   });
 }
@@ -1446,7 +1454,12 @@ function claimDate(props, personKey, form, dateLabel, name, email) {
   // Cell text is "day number\nstatus" — keep the day number, replace
   // only the status/name line so the square still looks right.
   const dayNumber = cell.getValue().toString().split('\n')[0];
-  const cellText = dayNumber + '\n' + name;
+  // Never write a blank name: the date has already left the dropdown
+  // above, and an empty name line makes setTextStyle() below throw, so
+  // the day would vanish from both the form and the schedule. That
+  // happens when the name question gets renamed in the Forms editor.
+  const shownName = String(name || '').trim() || '(signed up)';
+  const cellText = dayNumber + '\n' + shownName;
 
   // Bold just the name line, then mark the square green so filled
   // days stand out on the calendar at a glance.
@@ -1459,7 +1472,9 @@ function claimDate(props, personKey, form, dateLabel, name, email) {
   cell.setBackground('#93c47d');
 
   // 3) Email the signer a confirmation + calendar invite, if given one
-  if (email) sendConfirmationEmail(props, personKey, email, name, dateLabel, cellRef.iso);
+  // (a Quick Add row's Email cell can hold just a stray space)
+  const address = String(email || '').trim();
+  if (address) sendConfirmationEmail(props, personKey, address, shownName, dateLabel, cellRef.iso);
 
   return null;
 }
