@@ -1,0 +1,439 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Relief Society Meal Sign-Up",
+    "locale": "en",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:nayrslohcin/reliefsociety.git",
+      "link_mode": "local-only",
+      "revision": "ddc74fddb00a4fb6cd9e52ac43b582f9f5a35d5e"
+    }
+  },
+  "components": [
+    {
+      "id": "volunteer",
+      "type": "external",
+      "label": "Volunteers",
+      "sublabel": "ward members",
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 358,
+          "end_line": 367,
+          "label": "questions they answer"
+        }
+      ]
+    },
+    {
+      "id": "signup-form",
+      "type": "frontend",
+      "label": "Sign-up form",
+      "sublabel": "one Google Form per person",
+      "pos": [
+        250,
+        220
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 354,
+          "end_line": 371,
+          "label": "form + dropdown"
+        }
+      ]
+    },
+    {
+      "id": "handlers",
+      "type": "backend",
+      "label": "Trigger handlers",
+      "sublabel": "onSignup · onResponsesEdit",
+      "pos": [
+        530,
+        220
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "tag": "claimDate()",
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1291,
+          "end_line": 1311,
+          "label": "onSignup"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1321,
+          "end_line": 1335,
+          "label": "onResponsesEdit"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1465,
+          "end_line": 1540,
+          "label": "claimDate"
+        }
+      ]
+    },
+    {
+      "id": "schedule",
+      "type": "database",
+      "label": "Public schedule",
+      "sublabel": "anyone with the link can view",
+      "pos": [
+        830,
+        220
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 377,
+          "end_line": 395,
+          "label": "created and shared"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1511,
+          "end_line": 1532,
+          "label": "name written"
+        }
+      ]
+    },
+    {
+      "id": "mail",
+      "type": "cloud",
+      "label": "MailApp",
+      "sublabel": "confirmation + .ics invite",
+      "pos": [
+        530,
+        60
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1597,
+          "end_line": 1623,
+          "label": "sendConfirmationEmail"
+        }
+      ]
+    },
+    {
+      "id": "responses",
+      "type": "database",
+      "label": "Private responses",
+      "sublabel": "Quick Add · Quick Cancel tabs",
+      "pos": [
+        250,
+        390
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "tag": "phone numbers",
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 370,
+          "end_line": 373,
+          "label": "created"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1342,
+          "end_line": 1369,
+          "label": "Quick Add"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1429,
+          "end_line": 1454,
+          "label": "Quick Cancel"
+        }
+      ]
+    },
+    {
+      "id": "props",
+      "type": "database",
+      "label": "Script Properties",
+      "sublabel": "per-person records, ID lookups",
+      "pos": [
+        530,
+        390
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 403,
+          "end_line": 424,
+          "label": "records written"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 982,
+          "end_line": 990,
+          "label": "p:<person>: keys"
+        }
+      ]
+    },
+    {
+      "id": "coordinator",
+      "type": "external",
+      "label": "Coordinator",
+      "sublabel": "script owner",
+      "pos": [
+        40,
+        560
+      ],
+      "size": [
+        130,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 184,
+          "end_line": 229,
+          "label": "settings they edit"
+        }
+      ]
+    },
+    {
+      "id": "admin-form",
+      "type": "frontend",
+      "label": "Request form",
+      "sublabel": "optional, for a coordinator",
+      "pos": [
+        250,
+        720
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 469,
+          "end_line": 544,
+          "label": "createAdminSetupForm"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 559,
+          "end_line": 593,
+          "label": "onAdminSetupSubmit"
+        }
+      ]
+    },
+    {
+      "id": "setup",
+      "type": "backend",
+      "label": "Setup functions",
+      "sublabel": "create · extend · cancel · forget",
+      "pos": [
+        530,
+        560
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "sources": [
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 292,
+          "end_line": 446,
+          "label": "createSignupForCore"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 700,
+          "end_line": 798,
+          "label": "extendSignupForm"
+        },
+        {
+          "path": "reliefsociety-meals/reliefsociety-meal-signup.gs",
+          "line": 1043,
+          "end_line": 1054,
+          "label": "forgetPerson"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Owner's Google account",
+      "wraps": [
+        "mail",
+        "signup-form",
+        "handlers",
+        "schedule",
+        "responses",
+        "props",
+        "admin-form",
+        "setup"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Apps Script project",
+      "wraps": [
+        "handlers",
+        "props",
+        "setup"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "submit",
+      "from": "volunteer",
+      "to": "signup-form",
+      "label": "submits",
+      "variant": "emphasis"
+    },
+    {
+      "id": "form-trigger",
+      "from": "signup-form",
+      "to": "handlers",
+      "label": "onFormSubmit",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "write-name",
+      "from": "handlers",
+      "to": "schedule",
+      "label": "writes name",
+      "variant": "emphasis"
+    },
+    {
+      "id": "update-dates",
+      "from": "handlers",
+      "to": "signup-form",
+      "label": "removes date",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "send-mail",
+      "from": "handlers",
+      "to": "mail",
+      "label": "emails volunteer"
+    },
+    {
+      "id": "handler-records",
+      "from": "handlers",
+      "to": "props",
+      "label": "looks up person"
+    },
+    {
+      "id": "answers",
+      "from": "signup-form",
+      "to": "responses",
+      "label": "answers"
+    },
+    {
+      "id": "edit-trigger",
+      "from": "responses",
+      "to": "handlers",
+      "label": "onEdit"
+    },
+    {
+      "id": "quick-tabs",
+      "from": "coordinator",
+      "to": "responses",
+      "label": "Quick Add / Cancel"
+    },
+    {
+      "id": "fill-request",
+      "from": "coordinator",
+      "to": "admin-form",
+      "label": "fills in"
+    },
+    {
+      "id": "admin-trigger",
+      "from": "admin-form",
+      "to": "setup",
+      "label": "onFormSubmit"
+    },
+    {
+      "id": "run-editor",
+      "from": "coordinator",
+      "to": "setup",
+      "label": "runs in editor"
+    },
+    {
+      "id": "setup-records",
+      "from": "setup",
+      "to": "props",
+      "label": "writes records"
+    },
+    {
+      "id": "create-files",
+      "from": "setup",
+      "to": "schedule",
+      "label": "creates & extends"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One set of files per person",
+      "items": [
+        "Each PERSON_NAME gets its own form, private sheet and schedule in Drive under Relief Society Meals/<name>/",
+        "Setup also installs that person's two triggers: onSignup on the form, onResponsesEdit on the sheet",
+        "Volunteers reach the schedule through the link added to the form description"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Keeping people apart",
+      "items": [
+        "Every record is stored under p:<person>:… in Script Properties",
+        "formId: and ssId: lookups tell the shared handlers whose form or sheet fired",
+        "claimDate removes the taken date from the dropdown and closes the form when none are left"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Privacy and limits",
+      "items": [
+        "Only the schedule is shared, view-only; phone numbers stay in the private sheet",
+        "Google allows 20 triggers per project, so about 10 people at once; forgetPerson frees a spot"
+      ]
+    }
+  ]
+}

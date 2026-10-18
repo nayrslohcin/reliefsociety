@@ -354,6 +354,17 @@ npm test
 
 There's nothing to install first.
 
+[`docs/architecture.html`](docs/architecture.html) is an architecture
+diagram of how the pieces fit together. GitHub shows HTML as code, so
+download the file and open it in a browser. It was made with
+[archify](https://github.com/tt-a1i/archify) from
+[`docs/architecture.json`](docs/architecture.json); to rebuild it after
+editing that file, run this from this folder:
+
+```bash
+node <path-to-archify>/bin/archify.mjs finalize architecture docs/architecture.json docs/architecture.html --repo-root .. --quality showcase
+```
+
 ---
 
 ## Privacy

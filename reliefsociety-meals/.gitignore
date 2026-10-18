@@ -1,0 +1,7 @@
+# Archify working folders and the check records it writes next to a diagram
+.archify/
+docs/*.finalize.json
+docs/*.finalize-summary.json
+docs/*.browser-check.json
+docs/*.delivery.json
+docs/*.visual-check*
