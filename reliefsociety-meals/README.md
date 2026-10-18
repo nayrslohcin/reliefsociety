@@ -265,10 +265,11 @@ person up.
 | Wrap up once someone's meals are done | `PERSON_NAME` | `forgetPerson` |
 
 Adding more days with `extendSignupForm` keeps the same links, so you
-don't need to resend anything. For now it can only add **whole new
-months**: if November is already on someone's schedule, it can't add
-more November days. Plan the full range for the current month when you
-first set someone up.
+don't need to resend anything. Set `START_DATE` and `END_DATE` to just
+the new days, or to a longer range that overlaps the old one: either
+way it only adds days that aren't on the schedule yet, and never
+changes a day someone has signed up for. It can also open a day you
+skipped with `EXCLUDE_DATES` at setup.
 
 You can't break anything by running `createSignupForm` again for a name
 that's already set up. It won't overwrite anything; it just shows that
@@ -352,6 +353,17 @@ npm test
 ```
 
 There's nothing to install first.
+
+[`docs/architecture.html`](docs/architecture.html) is an architecture
+diagram of how the pieces fit together. GitHub shows HTML as code, so
+download the file and open it in a browser. It was made with
+[archify](https://github.com/tt-a1i/archify) from
+[`docs/architecture.json`](docs/architecture.json); to rebuild it after
+editing that file, run this from this folder:
+
+```bash
+node <path-to-archify>/bin/archify.mjs finalize architecture docs/architecture.json docs/architecture.html --repo-root .. --quality showcase
+```
 
 ---
 
