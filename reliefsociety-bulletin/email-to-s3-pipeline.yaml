@@ -208,7 +208,7 @@ Resources:
               return boto3.client("ses", region_name=os.environ["SES_REGION"])
 
           def lambda_handler(event, context):
-              allowed = set(os.environ.get("ALLOWED_SENDERS", "").lower().split(","))
+              allowed = {a.strip() for a in os.environ.get("ALLOWED_SENDERS", "").lower().split(",") if a.strip()}
               expected = os.environ.get("RECIPIENT_EMAIL", "").lower().strip()
               admin = os.environ.get("ADMIN_EMAIL", "").lower().strip()
 
@@ -569,7 +569,6 @@ Resources:
 
   PDFBucketPolicy:
     Type: AWS::S3::BucketPolicy
-    DependsOn: PDFCloudFrontDistribution
     Properties:
       Bucket: !Ref PDFDestinationBucket
       PolicyDocument:
@@ -744,7 +743,6 @@ Resources:
 
   SESCatchAllRule:
     Type: AWS::SES::ReceiptRule
-    DependsOn: SESReceiptRule
     Properties:
       RuleSetName: !Ref SESReceiptRuleSet
       After: !Ref SESReceiptRule

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Runs the tests for whichever project a commit touches, and stops the commit
+# if any fail. Turn it on once per clone with:
+#   git config core.hooksPath .githooks
+# Skip it for one commit with: git commit --no-verify
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+staged=$(git diff --cached --name-only)
+
+if grep -q '^reliefsociety-bulletin/' <<<"$staged"; then
+  echo "pre-commit: bulletin tests"
+  (cd reliefsociety-bulletin && python3 -m unittest discover -s tests -q)
+  # The linters CI runs, when they're installed here.
+  if command -v cfn-lint >/dev/null; then
+    cfn-lint reliefsociety-bulletin/email-to-s3-pipeline.yaml
+  fi
+  if command -v shellcheck >/dev/null; then
+    shellcheck reliefsociety-bulletin/deploy.sh
+  fi
+fi
+
+if grep -q '^reliefsociety-meals/' <<<"$staged"; then
+  echo "pre-commit: meal sign-up tests"
+  (cd reliefsociety-meals && npm test --silent)
+fi
