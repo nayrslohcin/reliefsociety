@@ -42,3 +42,17 @@ jobs:
           node-version: "22"
       - name: Unit tests
         run: npm test
+
+  missionary-meals:
+    name: Missionary meal sign-up
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: missionary-meals
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Unit tests
+        run: npm test
