@@ -5762,7 +5762,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>The editor downloads ReliefSocietyBulletin_&lt;date&gt;.html, but the Lambda only accepts an attachment named rsbulletin.html, so the file must be renamed first</li>
           <li>Because deploy.sh syncs s3-files/, the editor page is also served by CloudFront to anyone with its URL</li>
-          <li>CloudFront sends missing pages to /error.html, which is not in s3-files/</li>
+          <li>CloudFront sends missing pages to /error.html, a page-not-found page in s3-files/ styled like the bulletin</li>
         </ul>
       </div>
     </div>

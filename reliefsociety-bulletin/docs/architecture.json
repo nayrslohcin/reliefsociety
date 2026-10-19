@@ -156,7 +156,7 @@
       "items": [
         "The editor downloads ReliefSocietyBulletin_<date>.html, but the Lambda only accepts an attachment named rsbulletin.html, so the file must be renamed first",
         "Because deploy.sh syncs s3-files/, the editor page is also served by CloudFront to anyone with its URL",
-        "CloudFront sends missing pages to /error.html, which is not in s3-files/"
+        "CloudFront sends missing pages to /error.html, a page-not-found page in s3-files/ styled like the bulletin"
       ]
     }
   ]
