@@ -137,6 +137,7 @@
         "Allowed sender with rsbulletin.html attached: saved to the website bucket, CloudFront cache cleared, admin told it worked",
         "Allowed sender, no rsbulletin.html: automatic reply asking them to resend",
         "Sender not on the allowlist: the message is forwarded to the admin and nothing is published",
+        "Allowed sender's address, but SES can't confirm they sent it (SPF and DMARC both fail) or it fails the spam or virus scan: nothing is published and the admin gets a \"Bulletin email rejected\" notice",
         "Any other address at the domain: the catch-all rule runs the Lambda without storing the email, and the admin gets a wrong-recipient alert"
       ]
     },
