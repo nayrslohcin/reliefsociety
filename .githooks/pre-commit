@@ -24,3 +24,8 @@ if grep -q '^reliefsociety-meals/' <<<"$staged"; then
   echo "pre-commit: meal sign-up tests"
   (cd reliefsociety-meals && npm test --silent)
 fi
+
+if grep -q '^missionary-meals/' <<<"$staged"; then
+  echo "pre-commit: missionary meal sign-up tests"
+  (cd missionary-meals && npm test --silent)
+fi
