@@ -23,6 +23,7 @@ Receives email via AWS SES, validates the sender against an allowlist (and confi
 | `email-to-s3-pipeline.yaml` | CloudFormation template — deploys the full pipeline |
 | `deploy-policy.json` | IAM policy required to deploy the stack |
 | `email-to-s3-setup-guide.md` | Step-by-step setup guide |
+| `tests/` | Unit tests for the Lambda and checks on the deploy files — see [Automated tests](#automated-tests) |
 | `docs/architecture.html` | Architecture diagram — download and open in a browser. Made with [archify](https://github.com/tt-a1i/archify) from `docs/architecture.json`; rebuild from this folder with `node <path-to-archify>/bin/archify.mjs finalize architecture docs/architecture.json docs/architecture.html --repo-root .. --quality showcase` |
 
 ## Variables
@@ -199,6 +200,25 @@ aws logs tail /aws/lambda/email-pdf-ingest-EmailPdfProcessor --follow --region u
 - Allowed sender's address, but SES can't confirm they sent it (SPF and DMARC both fail), or it fails the spam/virus scan → not published, admin gets a "Bulletin email rejected" notice
 - Unauthorized sender → silently dropped, admin notified at `<ADMIN_EMAIL>`
 - Email sent to wrong address → silently dropped, admin notified at `<ADMIN_EMAIL>`
+
+### Automated tests
+
+The tests in [`tests/`](tests/) run the Lambda code straight from `email-to-s3-pipeline.yaml` with stand-ins for AWS, so nothing touches a real account. They cover each test path above, and they check that the template, `deploy.sh`, `deploy-policy.json` and `s3-files/` agree with each other. They need only Python 3.9 or newer, with nothing to install:
+
+```bash
+cd reliefsociety-bulletin
+python3 -m unittest discover -s tests
+```
+
+GitHub runs these on every pull request ([`.github/workflows/tests.yml`](../.github/workflows/tests.yml)), along with [cfn-lint](https://github.com/aws-cloudformation/cfn-lint) on the template and [ShellCheck](https://www.shellcheck.net) on `deploy.sh`.
+
+To run the tests automatically before each commit, turn on the repo's pre-commit hook once, from the repo's top folder:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It runs the tests for whichever project the commit changes, plus cfn-lint and ShellCheck if you've installed them (`brew install cfn-lint shellcheck`). `git commit --no-verify` skips it for one commit.
 
 ## Adding / Removing / Updating Email Addresses
 

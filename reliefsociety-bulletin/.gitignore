@@ -5,3 +5,4 @@ docs/*.finalize-summary.json
 docs/*.browser-check.json
 docs/*.delivery.json
 docs/*.visual-check*
+__pycache__/
