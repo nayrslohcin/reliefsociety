@@ -2,7 +2,7 @@
 
 Email-to-website pipeline for Relief Society bulletin distribution.
 
-Receives email via AWS SES, validates the sender against an allowlist, extracts an `index.html` attachment, and uploads it to an S3 bucket served through CloudFront. Unauthorized senders and wrong recipients are silently dropped and the admin is notified. Authorized senders who forget to attach `index.html` receive an automated reply.
+Receives email via AWS SES, validates the sender against an allowlist (and confirms with SES's SPF/DMARC, spam and virus checks that the email really came from that sender), extracts an `rsbulletin.html` attachment, and uploads it to an S3 bucket served through CloudFront. Unauthorized senders and wrong recipients are silently dropped and the admin is notified. Authorized senders who forget to attach `rsbulletin.html` receive an automated reply.
 
 ## Architecture
 
@@ -10,8 +10,8 @@ Receives email via AWS SES, validates the sender against an allowlist, extracts 
 |---|---|---|
 | Email receiving | AWS SES | Accepts inbound email, applies receipt rules |
 | Raw email storage | S3 (staging bucket) | SES stores the raw MIME message transiently (auto-deleted after 7 days) |
-| Processing | Lambda (Python) | Validates sender + recipient, extracts `index.html`, notifies admin |
-| Website storage | S3 (website bucket) | Hosts the uploaded `index.html` |
+| Processing | Lambda (Python) | Validates sender + recipient, extracts `rsbulletin.html`, notifies admin |
+| Website storage | S3 (website bucket) | Hosts the uploaded `rsbulletin.html` |
 | Secure CDN access | CloudFront + OAC | HTTPS-only, US-only geo-restriction, `X-Robots-Tag: noindex` |
 | DNS | Route 53 | Hosted zone, MX, A, DKIM, DMARC records — all managed by the stack |
 | SSL | ACM | Auto-validated certificate for apex + www |
@@ -23,6 +23,7 @@ Receives email via AWS SES, validates the sender against an allowlist, extracts 
 | `email-to-s3-pipeline.yaml` | CloudFormation template — deploys the full pipeline |
 | `deploy-policy.json` | IAM policy required to deploy the stack |
 | `email-to-s3-setup-guide.md` | Step-by-step setup guide |
+| `docs/architecture.html` | Architecture diagram — download and open in a browser. Made with [archify](https://github.com/tt-a1i/archify) from `docs/architecture.json`; rebuild from this folder with `node <path-to-archify>/bin/archify.mjs finalize architecture docs/architecture.json docs/architecture.html --repo-root .. --quality showcase` |
 
 ## Variables
 
@@ -181,7 +182,7 @@ Each address will receive a verification email from AWS — click the link to ve
 
 ## Testing
 
-Send an email with `index.html` attached to `<RECIPIENTEMAILADDRESS>` from an allowed sender address. Then verify the file was uploaded:
+Send an email with `rsbulletin.html` attached to `<RECIPIENTEMAILADDRESS>` from an allowed sender address. The attachment must have exactly that name: the bulletin editor downloads `ReliefSocietyBulletin_<date>.html`, so rename it to `rsbulletin.html` before attaching it. Then verify the file was uploaded:
 
 ```bash
 aws s3 ls s3://<BUCKET_NAME>/ --region us-east-1
@@ -193,8 +194,9 @@ aws logs tail /aws/lambda/email-pdf-ingest-EmailPdfProcessor --follow --region u
 ```
 
 **Test paths:**
-- Allowed sender + `index.html` attached → file uploaded to S3, site updates
-- Allowed sender + no `index.html` → automated reply sent to sender
+- Allowed sender + `rsbulletin.html` attached → file uploaded to S3, site updates
+- Allowed sender + no `rsbulletin.html` → automated reply sent to sender
+- Allowed sender's address, but SES can't confirm they sent it (SPF and DMARC both fail), or it fails the spam/virus scan → not published, admin gets a "Bulletin email rejected" notice
 - Unauthorized sender → silently dropped, admin notified at `<ADMIN_EMAIL>`
 - Email sent to wrong address → silently dropped, admin notified at `<ADMIN_EMAIL>`
 

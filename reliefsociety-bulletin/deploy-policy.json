@@ -182,7 +182,8 @@
       "Action": [
         "route53:ChangeResourceRecordSets",
         "route53:ListResourceRecordSets",
-        "route53:GetHostedZone"
+        "route53:GetHostedZone",
+        "route53:ListTagsForResource"
       ],
       "Resource": "arn:aws:route53:::hostedzone/*"
     },

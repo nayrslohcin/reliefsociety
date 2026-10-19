@@ -195,6 +195,7 @@ Resources:
         ZipFile: |
           import boto3, email, os, logging
           from email import policy as ep
+          from email.utils import parseaddr
           from datetime import datetime
 
           logger = logging.getLogger()
@@ -234,6 +235,12 @@ Resources:
                           forward_to_admin(raw, sender, admin)
                       continue
 
+                  problem = failed_checks(receipt, mail, sender)
+                  if problem:
+                      logger.info(f"Rejected {msg_id} from {sender}: {problem} — notifying admin")
+                      notify_admin(admin, sender, recipients, problem)
+                      continue
+
                   raw = fetch_raw(msg_id)
                   if not raw:
                       continue
@@ -249,6 +256,28 @@ Resources:
                   upload_html(html, sender, msg_id)
 
               return {"statusCode": 200}
+
+          def verdict(receipt, name):
+              return receipt.get(name, {}).get("status", "")
+
+          # The sender address alone is easy to forge, so an allowlisted sender
+          # is only trusted once SES's scan (ScanEnabled on the receipt rules)
+          # confirms it. SPF checks the envelope sender's domain, which is the
+          # address matched against the allowlist; DMARC checks the From header,
+          # so it only counts when that header names the same address.
+          # Returns why the message was rejected, or None if it passed.
+          def failed_checks(receipt, mail, sender):
+              if verdict(receipt, "virusVerdict") != "PASS":
+                  return "it did not pass the virus scan"
+              if verdict(receipt, "spamVerdict") == "FAIL":
+                  return "it was flagged as spam"
+              if verdict(receipt, "spfVerdict") == "PASS":
+                  return None
+              header_from = [parseaddr(a)[1].lower().strip()
+                             for a in mail.get("commonHeaders", {}).get("from", [])]
+              if verdict(receipt, "dmarcVerdict") == "PASS" and header_from == [sender]:
+                  return None
+              return "SES could not confirm it really came from that address (SPF and DMARC did not pass)"
 
           def forward_to_admin(raw, sender, admin):
               if not admin:
@@ -286,13 +315,24 @@ Resources:
           def notify_admin(admin, sender, recipients, reason):
               if not admin:
                   return
-              subject = "Wrong recipient alert"
-              body = (
-                  f"An email was received for an unexpected recipient.\n\n"
-                  f"Sender: {sender}\n"
-                  f"Recipients: {', '.join(recipients)}\n\n"
-                  "This is an automated notification."
-              )
+              if reason == "wrong_recipient":
+                  subject = "Wrong recipient alert"
+                  body = (
+                      f"An email was received for an unexpected recipient.\n\n"
+                      f"Sender: {sender}\n"
+                      f"Recipients: {', '.join(recipients)}\n\n"
+                      "This is an automated notification."
+                  )
+              else:
+                  subject = "Bulletin email rejected"
+                  body = (
+                      f"An email claiming to be from an allowed sender was not published "
+                      f"because {reason}.\n\n"
+                      f"Sender: {sender}\n\n"
+                      "If they did send it, ask them to send it again. If they didn't, "
+                      "someone may be pretending to be them.\n\n"
+                      "This is an automated notification."
+                  )
               try:
                   ses_client().send_email(
                       Source=os.environ["REPLY_FROM"],
