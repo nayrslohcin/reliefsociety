@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Relief Society Bulletin Pipeline",
+    "locale": "en",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:nayrslohcin/reliefsociety.git",
+      "link_mode": "local-only",
+      "revision": "bf35098c5aa511fe935ad437bf7483812eb691a4"
+    }
+  },
+  "components": [
+    {
+      "id": "editor", "type": "frontend", "label": "Bulletin editor", "sublabel": "runs in a browser",
+      "pos": [40, 40], "size": [150, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/s3-files/ReliefSocietyBulletinEditorMASTERKEY.html", "line": 269, "end_line": 270, "label": "loads saved draft" },
+        { "path": "reliefsociety-bulletin/s3-files/ReliefSocietyBulletinEditorMASTERKEY.html", "line": 755, "end_line": 763, "label": "downloads the bulletin" }
+      ]
+    },
+    {
+      "id": "author", "type": "external", "label": "Bulletin author", "sublabel": "on ALLOWED_SENDERS",
+      "pos": [40, 200], "size": [150, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 30, "end_line": 35, "label": "AllowedSenders" }
+      ]
+    },
+    {
+      "id": "ses-in", "type": "messagebus", "label": "SES inbound", "sublabel": "receipt rules + scan",
+      "pos": [300, 200], "size": [160, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 560, "end_line": 568, "label": "MX to SES" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 680, "end_line": 699, "label": "main rule" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 705, "end_line": 719, "label": "catch-all rule" }
+      ]
+    },
+    {
+      "id": "raw", "type": "database", "label": "Staging bucket", "sublabel": "raw MIME · 7-day expiry",
+      "pos": [445, 40], "size": [170, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 80, "end_line": 110, "label": "bucket + SES put policy" }
+      ]
+    },
+    {
+      "id": "lambda", "type": "backend", "label": "Processor Lambda", "sublabel": "checks recipient, sender, file",
+      "pos": [590, 200], "size": [180, 60], "tag": "python3.12",
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 174, "end_line": 193, "label": "function + env vars" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 209, "end_line": 251, "label": "lambda_handler checks" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 309, "end_line": 353, "label": "fetch, find, upload" }
+      ]
+    },
+    {
+      "id": "ses-out", "type": "cloud", "label": "SES outbound", "sublabel": "from REPLY_FROM",
+      "pos": [590, 380], "size": [180, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 253, "end_line": 307, "label": "forward + alert admin" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 354, "end_line": 375, "label": "success notice" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 377, "end_line": 399, "label": "missing-file reply" }
+      ]
+    },
+    {
+      "id": "admin", "type": "external", "label": "Admin", "sublabel": "ADMIN_EMAIL",
+      "pos": [590, 540], "size": [180, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 37, "end_line": 41, "label": "AdminEmail" }
+      ]
+    },
+    {
+      "id": "site", "type": "database", "label": "Website bucket", "sublabel": "private · rsbulletin.html",
+      "pos": [870, 200], "size": [150, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 116, "end_line": 124, "label": "public access blocked" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 530, "end_line": 554, "label": "bucket policy" }
+      ]
+    },
+    {
+      "id": "cdn", "type": "security", "label": "CloudFront", "sublabel": "HTTPS · US only · noindex",
+      "pos": [870, 380], "size": [150, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 437, "end_line": 461, "label": "noindex header + OAC" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 471, "end_line": 522, "label": "distribution" }
+      ]
+    },
+    {
+      "id": "readers", "type": "external", "label": "Ward members", "sublabel": "read the bulletin",
+      "pos": [870, 540], "size": [150, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 492, "end_line": 496, "label": "US-only viewers" },
+        { "path": "reliefsociety-bulletin/s3-files/robots.txt", "line": 1, "end_line": 2, "label": "robots.txt" }
+      ]
+    },
+    {
+      "id": "dns", "type": "cloud", "label": "Route 53 + ACM", "sublabel": "zone, MX, DKIM, cert",
+      "pos": [1110, 380], "size": [130, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 71, "end_line": 74, "label": "hosted zone" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 415, "end_line": 431, "label": "certificate" },
+        { "path": "reliefsociety-bulletin/email-to-s3-pipeline.yaml", "line": 574, "end_line": 598, "label": "A records to CloudFront" }
+      ]
+    },
+    {
+      "id": "deploy", "type": "backend", "label": "deploy.sh", "sublabel": "stack + s3 sync",
+      "pos": [1110, 200], "size": [130, 60],
+      "sources": [
+        { "path": "reliefsociety-bulletin/deploy.sh", "line": 1, "end_line": 45, "label": "deploy script" }
+      ]
+    }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "AWS mail-to-web pipeline", "wraps": ["ses-in", "raw", "lambda", "ses-out", "site", "cdn"], "pad": 20 }
+  ],
+  "connections": [
+    { "id": "edit", "from": "author", "to": "editor", "label": "edits, downloads" },
+    { "id": "send", "from": "author", "to": "ses-in", "label": "emails file", "variant": "emphasis" },
+    { "id": "store-raw", "from": "ses-in", "to": "raw", "label": "stores raw MIME" },
+    { "id": "invoke", "from": "ses-in", "to": "lambda", "label": "invokes · async", "variant": "emphasis" },
+    { "id": "read-raw", "from": "lambda", "to": "raw", "label": "reads raw" },
+    { "id": "publish", "from": "lambda", "to": "site", "label": "PutObject", "variant": "emphasis" },
+    { "id": "invalidate", "from": "lambda", "to": "cdn", "label": "invalidates", "variant": "dashed" },
+    { "id": "notify", "from": "lambda", "to": "ses-out", "label": "notices" },
+    { "id": "alert", "from": "ses-out", "to": "admin", "label": "alerts + forwards" },
+    { "id": "reply", "from": "ses-out", "to": "author", "label": "missing-file reply", "variant": "dashed", "fromSide": "left", "toSide": "bottom" },
+    { "id": "serve", "from": "site", "to": "cdn", "label": "read via OAC", "variant": "security" },
+    { "id": "view", "from": "cdn", "to": "readers", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "domain", "from": "dns", "to": "cdn", "label": "DNS + TLS" },
+    { "id": "sync", "from": "deploy", "to": "site", "label": "s3 sync" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What happens to each email",
+      "items": [
+        "Allowed sender with rsbulletin.html attached: saved to the website bucket, CloudFront cache cleared, admin told it worked",
+        "Allowed sender, no rsbulletin.html: automatic reply asking them to resend",
+        "Sender not on the allowlist: the message is forwarded to the admin and nothing is published",
+        "Any other address at the domain: the catch-all rule runs the Lambda without storing the email, and the admin gets a wrong-recipient alert"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Deploying",
+      "items": [
+        "One CloudFormation stack, email-pdf-ingest in us-east-1, creates every AWS resource shown",
+        "Two phases: NameserversReady=false first, then true once the domain points at Route 53, which adds the certificate, aliases and A records",
+        "The SES rule set has to be activated by hand after the first deploy",
+        "deploy.sh reads the current settings back from the Lambda, redeploys the stack, then syncs s3-files/ into the website bucket"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Worth knowing",
+      "items": [
+        "The editor downloads ReliefSocietyBulletin_<date>.html, but the Lambda only accepts an attachment named rsbulletin.html, so the file must be renamed first",
+        "Because deploy.sh syncs s3-files/, the editor page is also served by CloudFront to anyone with its URL",
+        "CloudFront sends missing pages to /error.html, which is not in s3-files/"
+      ]
+    }
+  ]
+}
