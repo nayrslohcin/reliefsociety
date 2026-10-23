@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Missionary Meal Sign-Up",
+    "locale": "en",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:nayrslohcin/reliefsociety.git",
+      "link_mode": "local-only",
+      "revision": "a99440a9a7b2fdcf688f78d857ecb82fbf112e00"
+    }
+  },
+  "components": [
+    {
+      "id": "volunteer",
+      "type": "external",
+      "label": "Volunteers",
+      "sublabel": "ward members",
+      "pos": [40, 220],
+      "size": [130, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 226, "end_line": 228, "label": "questions they answer" }
+      ]
+    },
+    {
+      "id": "signup-form",
+      "type": "frontend",
+      "label": "Sign-up form",
+      "sublabel": "dropdown of open dates",
+      "pos": [250, 220],
+      "size": [170, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 265, "end_line": 279, "label": "form + dropdown" }
+      ]
+    },
+    {
+      "id": "handlers",
+      "type": "backend",
+      "label": "Trigger handlers",
+      "sublabel": "onSignup · onResponsesEdit",
+      "pos": [530, 220],
+      "size": [190, 60],
+      "tag": "claimDate()",
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1708, "end_line": 1728, "label": "onSignup" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1735, "end_line": 1773, "label": "onResponsesEdit + Quick Add" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1855, "end_line": 1894, "label": "claimDate" }
+      ]
+    },
+    {
+      "id": "schedule",
+      "type": "database",
+      "label": "Public schedule",
+      "sublabel": "monthly calendar grid",
+      "pos": [830, 220],
+      "size": [170, 60],
+      "tag": "view-only link",
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 289, "end_line": 308, "label": "created and shared" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1911, "end_line": 1927, "label": "name written" }
+      ]
+    },
+    {
+      "id": "mail",
+      "type": "cloud",
+      "label": "MailApp",
+      "sublabel": "confirmation + .ics invite",
+      "pos": [530, 100],
+      "size": [190, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 2042, "end_line": 2064, "label": "sendConfirmationEmail" }
+      ]
+    },
+    {
+      "id": "timed",
+      "type": "backend",
+      "label": "Timed triggers",
+      "sublabel": "Sunday pause · nightly prune",
+      "pos": [250, 40],
+      "size": [170, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1205, "end_line": 1256, "label": "checkSundaySchedule, every 5 min" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 570, "end_line": 595, "label": "pruneOldDates" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1130, "end_line": 1140, "label": "nightly at 1 AM" }
+      ]
+    },
+    {
+      "id": "responses",
+      "type": "database",
+      "label": "Private responses",
+      "sublabel": "Quick Add · Quick Cancel tabs",
+      "pos": [250, 390],
+      "size": [170, 60],
+      "tag": "phone numbers",
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 281, "end_line": 285, "label": "created" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1936, "end_line": 1962, "label": "Quick Add / Cancel tabs" }
+      ]
+    },
+    {
+      "id": "props",
+      "type": "database",
+      "label": "Script Properties",
+      "sublabel": "file IDs · date-to-square map",
+      "pos": [530, 390],
+      "size": [190, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 302, "end_line": 327, "label": "IDs + SCHEDULE_MAP saved" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 1862, "end_line": 1872, "label": "map read on sign-up" }
+      ]
+    },
+    {
+      "id": "coordinator",
+      "type": "external",
+      "label": "Coordinator",
+      "sublabel": "script owner",
+      "pos": [40, 560],
+      "size": [130, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 184, "end_line": 203, "label": "settings they edit" }
+      ]
+    },
+    {
+      "id": "editor-fns",
+      "type": "backend",
+      "label": "Editor functions",
+      "sublabel": "create · extend · cancel · repair",
+      "pos": [530, 560],
+      "size": [190, 60],
+      "sources": [
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 237, "end_line": 362, "label": "createSignupForm" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 383, "end_line": 475, "label": "extendSignupForm" },
+        { "path": "missionary-meals/missionary-meal-signup.gs", "line": 912, "end_line": 960, "label": "repairCalendar" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Owner's Google account",
+      "wraps": ["signup-form", "handlers", "schedule", "mail", "timed", "responses", "props", "editor-fns"]
+    }
+  ],
+  "connections": [
+    { "id": "submit", "from": "volunteer", "to": "signup-form", "label": "submits", "variant": "emphasis" },
+    { "id": "form-trigger", "from": "signup-form", "to": "handlers", "label": "onFormSubmit", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "write-name", "from": "handlers", "to": "schedule", "label": "writes name", "variant": "emphasis" },
+    { "id": "remove-date", "from": "handlers", "to": "signup-form", "label": "removes date", "fromSide": "left", "toSide": "right" },
+    { "id": "send-mail", "from": "handlers", "to": "mail", "label": "emails if given" },
+    { "id": "read-map", "from": "handlers", "to": "props", "label": "finds square" },
+    { "id": "answers", "from": "signup-form", "to": "responses", "label": "answers" },
+    { "id": "edit-trigger", "from": "responses", "to": "handlers", "label": "onEdit" },
+    { "id": "mark-past", "from": "timed", "to": "schedule", "label": "marks (past)" },
+    { "id": "pause-prune", "from": "timed", "to": "signup-form", "label": "closes Sundays · prunes" },
+    { "id": "quick-tabs", "from": "coordinator", "to": "responses", "label": "Quick Add / Cancel" },
+    { "id": "run-editor", "from": "coordinator", "to": "editor-fns", "label": "runs in editor" },
+    { "id": "save-map", "from": "editor-fns", "to": "props", "label": "saves IDs + map" },
+    { "id": "draw-months", "from": "editor-fns", "to": "schedule", "label": "draws months" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One sign-up, three places",
+      "items": [
+        "claimDate takes the date off the dropdown first, then writes the name on the calendar",
+        "If the calendar write fails, the row is in the responses sheet and the date is gone from the form, but the square still says available",
+        "diagnoseSignups reports this without changing anything; repairCalendar puts missing names back"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Running on a clock",
+      "items": [
+        "Every 5 minutes: closes the form all Sunday and reopens it at 7 PM, so online sign-ups can't clash with the paper sheet at church",
+        "Nightly, 1–2 AM: drops past dates from the dropdown and greys their squares"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Privacy",
+      "items": [
+        "Only the schedule is shared, view-only, and it shows names alone",
+        "Phone numbers and emails stay in the private responses sheet; the email question is optional"
+      ]
+    }
+  ]
+}

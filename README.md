@@ -19,7 +19,8 @@ your own Google account, with nothing to install.
 
 **[Setup instructions →](missionary-meals/missionary-meal-signup.gs)**
 (in the comment at the top of the script) ·
-**[Changing the script safely →](missionary-meals/DEPLOY.md)**
+**[Changing the script safely →](missionary-meals/DEPLOY.md)** ·
+**[Architecture diagram →](missionary-meals/docs/architecture.html)**
 
 ## Relief Society bulletin → [`reliefsociety-bulletin/`](reliefsociety-bulletin/)
 
