@@ -177,3 +177,23 @@ would *not* have caught:
 
 That is what step 4 is for. Green tests are not a substitute for trying
 it in TEST.
+
+---
+
+## Architecture diagram
+
+[`docs/architecture.html`](docs/architecture.html) is a one-page
+diagram of how the form, the trigger handlers, the spreadsheets and the
+timed triggers fit together. GitHub shows HTML as code, so download the
+file and open it in a browser. It was made with
+[archify](https://github.com/tt-a1i/archify) from
+[`docs/architecture.json`](docs/architecture.json); to rebuild it after
+editing that file, run this from this folder:
+
+```bash
+node <path-to-archify>/bin/archify.mjs finalize architecture docs/architecture.json docs/architecture.html --repo-root .. --quality showcase
+```
+
+The line numbers it cites are pinned to the commit in
+`meta.repository.revision`, so update that when you rebuild after
+changing the script.
