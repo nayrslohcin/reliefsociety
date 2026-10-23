@@ -101,6 +101,10 @@ class FakeRange {
     return this;
   }
 
+  getSheet() { return this.sheet; }
+  getRow() { return this.row; }
+  getLastRow() { return this.row + this.numRows - 1; }
+
   getValue() { return this.sheet._cell(this.row, this.col).value; }
 
   setValue(v) { return this._each((r, c) => { this.sheet._cell(r, c).value = v; }); }
